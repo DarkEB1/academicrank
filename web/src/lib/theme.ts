@@ -1,4 +1,28 @@
+import { useEffect, useState } from 'react';
+
 export type Theme = 'light' | 'dark';
+
+/**
+ * WebGL colours cannot read CSS variables, so the graph needs to know the theme
+ * as a value. Observed from the `dark` class rather than from state, so it stays
+ * correct however the class was set (toggle, palette command, or the inline
+ * bootstrap script in index.html).
+ */
+export function useIsDark(): boolean {
+  const [dark, setDark] = useState(
+    () => typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
+  );
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const observer = new MutationObserver(() => setDark(root.classList.contains('dark')));
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+    setDark(root.classList.contains('dark'));
+    return () => observer.disconnect();
+  }, []);
+
+  return dark;
+}
 
 const KEY = 'provenance.theme';
 

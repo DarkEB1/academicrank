@@ -105,9 +105,20 @@ export function buildQuery(params: Record<string, QueryValue>): string {
   return s ? `?${s}` : '';
 }
 
-async function parseError(res: Response): Promise<ApiError> {
+async function parseError(res: Response): Promise<ApiError | NetworkError> {
   let detail: unknown;
   let message = `${res.status} ${res.statusText}`;
+
+  // A 5xx that is not JSON did not come from the application: it is the dev
+  // proxy (or a gateway) reporting that nothing is listening. Saying "the
+  // server failed" there would send people debugging the wrong process.
+  const contentType = res.headers.get('content-type') ?? '';
+  if (res.status >= 500 && !contentType.includes('json')) {
+    return new NetworkError(
+      'Could not reach the Provenance API. Is the backend running on port 8000?',
+    );
+  }
+
   try {
     const body = await res.json();
     detail = body;

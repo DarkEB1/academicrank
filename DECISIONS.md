@@ -172,3 +172,109 @@ either connector generation.
   chars.
 - Raw JSON is retained alongside the normalised tables so fields can be re-derived
   without re-scraping.
+
+---
+
+## D2.1 The vendored checkout is patched
+
+`vendor/meritrank-rust` is not a pristine clone. Two changes were necessary to build
+on Windows:
+
+1. **Line endings.** The clone picked up CRLF, and `generate_scripts.sh` then died with
+   `syntax error: unexpected end of file (expecting "then")`. All vendored `.sh` files
+   converted to LF, plus a repo `.gitattributes` (`* text=auto eol=lf`) so it cannot
+   regress.
+2. **`psql-connector/20_pgmer2.sh`.** Upstream calls `"${psql[@]}"`, a bash array that
+   the postgres entrypoint defines only when it *sources* an init file — which it does
+   only for non-executable files. A Windows checkout marks the file 755, Docker `COPY`
+   preserves that, the entrypoint runs it as a subprocess, the array is empty, and init
+   fails with `--dbname=provenance: command not found`, leaving the extension
+   uninstalled. Patched to invoke `psql` directly, which works whether sourced or run.
+
+Neither patch changes engine behaviour. Both are marked in-file.
+
+---
+
+## D4. Per-user context weights are composed in Python, not reloaded into the engine
+
+`mr_bulk_load_edges` **clears and replaces all engine state**, and the engine holds one
+graph shared by every user. So per-user context weights cannot be implemented by
+rebuilding the graph with different weights — that would be global, and would take
+minutes per adjustment.
+
+**Decision:** query each context separately (`mr_scores(ego, context=c)`, one call per
+context) and compose in Python:
+
+```
+score(p) = baseline(p) + Σ_c  w_c · ( score_c(p) − baseline(p) )
+```
+
+where `baseline` is the `citation` context. Because each named context is
+"baseline + one entity family" (D1.6), the bracketed term is that family's **marginal**
+contribution, and the weights are a genuine per-user, live control — which is what makes
+the parameter playground honest rather than decorative.
+
+**Rejected:** baking context weights into edge weights at build time. Simpler and it
+would let the engine do the combining, but it makes weights global to all users and
+turns every slider drag into a multi-minute full graph reload.
+
+**Cost:** N+1 `mr_scores` calls per ranking instead of one. Acceptable, and it is the
+only design that yields per-user weighting on shared engine state.
+
+---
+
+## D5. Uncertainty via leave-one-out
+
+The service exposes no per-call walk count and no sampling seed, so repeated
+independent estimates of the same ego are not available cheaply, and a true Monte Carlo
+standard error cannot be reported. **Decision: leave-one-out over the trust set**,
+jackknife-scaled by `sqrt(n-1)`, with tie groups assigned by overlapping confidence
+intervals.
+
+The prompt offered this as the fallback; it is being used as the primary because the
+preferred option is genuinely unavailable. It also answers the more useful question —
+how much does this ranking depend on any one of my trust decisions — but it is not a
+sampling error bar and KNOWN_ISSUES.md says so.
+
+---
+
+## D6. Phase 1 Gate 2 is not met, and I chose not to make it met
+
+The Phase 1 gate asks for **≥90% of full papers having at least one resolved in-corpus
+reference**. Measured: **69.7%** before fixing the stub bug below. The ceiling for this
+corpus is **71.2%**, so 90% was unreachable by any loader.
+
+Cause, verified against the raw OpenAlex JSONL independently of the database:
+**2,079 of 7,211 full works (28.8%) arrive from OpenAlex with `referenced_works: []`.**
+The key is present and the list is empty. They are concentrated in books and in
+pre-2000 articles. Of the 5,132 papers that *do* carry a reference list, **97.9%**
+resolve at least one in-corpus target — i.e. the resolution logic is essentially at its
+theoretical maximum.
+
+Two ways to make the gate go green were available:
+
+1. **Filter the seed query on `has_references:true`.** Rejected. It would pass the gate
+   by deleting the evidence. In mathematics specifically it would strip out books, and
+   books are not marginal here — Griffiths & Harris, *Principles of Algebraic Geometry*
+   is in the top of our own corpus by in-corpus citations. A mathematics corpus that
+   excludes monographs is a worse product, and the gate exists to protect the product,
+   not the other way round.
+2. **Lower the threshold.** Rejected as self-serving: moving a gate you just failed is
+   not passing it.
+
+**Decision: keep the corpus, report the miss, and report the metric that is actually
+diagnostic** (97.9% of papers that have reference lists resolve one). This is recorded
+in KNOWN_ISSUES.md as an open item rather than quietly dropped.
+
+### D6.1 A real defect this exposed, now fixed
+
+`scripts/scrape.py` built its snowball `referrer_count` from the 3,000 **seed** works
+only. The 4,211 **promoted** works are full nodes too, so their references also needed
+stubs — without them every citation from a promoted paper to an unseen target dangled
+and was dropped at load time. That silently discarded **55,889 of 190,987 citations**
+(29%) and left 43,609 distinct reference targets unstubbed.
+
+Fixed by unioning the promoted works' references into the stub set before hydration.
+This does not move Gate 2 (it does nothing for papers with no reference list at all)
+but it materially increases citation density, which is the strongest signal in the
+graph.

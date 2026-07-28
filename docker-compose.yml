@@ -46,7 +46,7 @@ services:
       -c shared_buffers=512MB
       -c work_mem=64MB
       -c maintenance_work_mem=512MB
-    ports: ["5432:5432"]
+    ports: ["55432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/init/10_provenance.sql:/docker-entrypoint-initdb.d/10_provenance.sql:ro

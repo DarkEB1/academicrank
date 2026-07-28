@@ -4,7 +4,7 @@ import { Command, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useCommandKey } from '@/lib/hooks';
 import { useSession } from '@/lib/session';
-import { useHealth } from '@/lib/queries';
+import { useHealth, useSeedCount } from '@/lib/queries';
 import { CommandPalette } from './CommandPalette';
 import { ThemeToggle } from './ThemeToggle';
 import { ProximityStatement } from './Honesty';
@@ -47,6 +47,16 @@ function HealthDot(): JSX.Element | null {
           ? 'API down'
           : `${formatCount(health.data?.nodes ?? 0)} nodes · ${formatCount(health.data?.edges ?? 0)} edges`}
       </span>
+    </span>
+  );
+}
+
+function SeedCount({ profileId }: { profileId: string }): JSX.Element | null {
+  const seeds = useSeedCount(profileId);
+  if (seeds.isLoading) return null;
+  return (
+    <span className="tnum">
+      {seeds.count} seed{seeds.count === 1 ? '' : 's'}
     </span>
   );
 }
@@ -101,9 +111,7 @@ export function AppShell(): JSX.Element {
               {status === 'loading' ? (
                 <Loader2 aria-hidden className="h-3 w-3 animate-spin" />
               ) : profile ? (
-                <span className="tnum">
-                  {profile.trust_count} seed{profile.trust_count === 1 ? '' : 's'}
-                </span>
+                <SeedCount profileId={profile.id} />
               ) : null}
             </span>
             <Button

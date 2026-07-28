@@ -5,7 +5,7 @@ import { useExplain } from '@/lib/queries';
 import { formatContribution, KIND_LABEL, pathSentence, pathSteps } from '@/lib/paths';
 import { formatInterval, formatScore, METHOD_COPY } from '@/lib/format';
 import type { ContextContribution, ContributingPath } from '@/lib/types';
-import { PaperTitle } from './Math';
+import { MathText, PaperTitle } from './Math';
 import { ScoreReadout } from './ScoreBar';
 import { Badge } from './ui/Badge';
 import { CardSkeleton, LoadingRegion, Skeleton } from './ui/Skeleton';
@@ -149,7 +149,10 @@ function PathCard({ path }: { path: ContributingPath }): JSX.Element {
         className="mt-1 truncate text-sm leading-snug text-ink"
       />
 
-      <p className="mt-2.5 text-sm leading-relaxed text-ink">{pathSentence(path)}</p>
+      {/* Node labels are paper titles and may carry TeX. */}
+      <MathText as="p" className="mt-2.5 text-sm leading-relaxed text-ink">
+        {pathSentence(path)}
+      </MathText>
 
       {steps.length > 0 ? (
         <div className="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-1.5 text-2xs">
@@ -172,7 +175,11 @@ function PathCard({ path }: { path: ContributingPath }): JSX.Element {
                 )}
                 title={KIND_LABEL[node.kind]}
               >
-                {node.kind === 'profile' ? 'your profile' : node.label}
+                {node.kind === 'profile' ? (
+                  'your profile'
+                ) : (
+                  <MathText as="span">{node.label}</MathText>
+                )}
               </span>
             </Fragment>
           ))}

@@ -7,6 +7,7 @@ the bottom are the single source of truth for that mapping.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from typing import Optional
 
 from sqlalchemy import (
@@ -215,8 +216,15 @@ def venue_node(venue_id: str) -> str:
     return f"BS{venue_id[1:]}" if venue_id.startswith("S") else f"BS{venue_id}"
 
 
+_WORK_NODE_RE = re.compile(r"^UW\d+$")
+
+
 def node_to_work_id(node: str) -> str | None:
-    """Inverse of work_node(); None if the node is not a paper."""
-    if node.startswith("U") and not node.startswith("Uprofile_"):
-        return node[1:]
-    return None
+    """Inverse of work_node(); None if the node is not a paper.
+
+    Must be strict. Every ego is a `U` node too -- profiles (`Uprofile_*`) but also
+    the scratch egos used for leave-one-out, simulation and the global-merit
+    reference. A loose prefix test lets those leak into rankings as phantom papers
+    (the ego scores itself highest, so it lands at rank 1 with no title).
+    """
+    return node[1:] if _WORK_NODE_RE.match(node) else None

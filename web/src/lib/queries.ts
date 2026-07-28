@@ -86,6 +86,25 @@ export function useTrustSet(profileId: string): UseQueryResult<TrustListResponse
   });
 }
 
+/**
+ * Live seed count. The session profile's `trust_count` is fetched once at
+ * bootstrap and goes stale the moment a seed is added, so anything that gates
+ * on "do you have seeds yet" reads the trust set itself.
+ */
+export function useSeedCount(profileId: string): {
+  count: number;
+  distrusted: number;
+  isLoading: boolean;
+} {
+  const trust = useTrustSet(profileId);
+  const items = trust.data?.items ?? [];
+  return {
+    count: items.filter((entry) => !entry.is_distrust).length,
+    distrusted: items.filter((entry) => entry.is_distrust).length,
+    isLoading: trust.isLoading,
+  };
+}
+
 export function useSetTrust(
   profileId: string,
 ): UseMutationResult<

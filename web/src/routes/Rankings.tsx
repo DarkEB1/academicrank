@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CONTEXTS, type Context, type ScoredPaper } from '@/lib/types';
-import { useRankings } from '@/lib/queries';
+import { useRankings, useSeedCount } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import { distinguishablePositions, hasNonContiguousGroups } from '@/lib/ties';
 import { formatMillis } from '@/lib/format';
@@ -68,9 +68,12 @@ export function RankingsScreen(): JSX.Element {
     setParams(next, { replace: true });
   };
 
+  const seedCount = useSeedCount(profileId);
   const data = rankings.data;
   const items = data?.items ?? [];
-  const seeds = data?.cold_start.seeds ?? profile?.trust_count ?? 0;
+  // The server's own count is authoritative; the trust set covers the window
+  // before the first ranking has arrived.
+  const seeds = data?.cold_start.seeds ?? seedCount.count;
   const total = data?.total ?? 0;
   const positions = distinguishablePositions(items);
 

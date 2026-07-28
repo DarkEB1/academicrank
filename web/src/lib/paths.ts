@@ -106,7 +106,9 @@ export function pathSentence(path: Pick<ContributingPath, 'nodes' | 'edges' | 's
             : subject;
       parts.push(`${trusted} ${step.phrase} ${object}`);
     } else {
-      parts.push(`which ${step.phrase} ${object}`);
+      // People are "who"; papers, venues and topics are "which".
+      const pronoun = step.from.kind === 'author' ? 'who' : 'which';
+      parts.push(`${pronoun} ${step.phrase} ${object}`);
     }
   });
 

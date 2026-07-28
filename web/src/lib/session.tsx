@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api, ApiError, clearSession, NetworkError, storeSession } from './api';
 import type { ProfileMe } from './types';
@@ -23,6 +23,39 @@ type SessionContextValue = SessionState & {
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 
+/**
+ * Module-scoped so React 18 StrictMode's double effect invocation joins the
+ * same request rather than creating two anonymous profiles — and so the second
+ * invocation is not starved by an in-flight guard.
+ */
+let pending: Promise<ProfileMe> | null = null;
+
+async function resolveProfile(): Promise<ProfileMe> {
+  try {
+    return await api.me();
+  } catch (err) {
+    // No usable identity yet (or a stale token): mint a fresh profile.
+    if (err instanceof ApiError && [401, 403, 404].includes(err.status)) {
+      clearSession();
+      const created = await api.createProfile();
+      storeSession(created.id, created.token);
+      return await api.me();
+    }
+    throw err;
+  }
+}
+
+function bootstrap(): Promise<ProfileMe> {
+  if (!pending) {
+    pending = resolveProfile().catch((err) => {
+      // Do not cache a failure: retry must be able to try again.
+      pending = null;
+      throw err;
+    });
+  }
+  return pending;
+}
+
 export function SessionProvider({ children }: { children: ReactNode }): JSX.Element {
   const [state, setState] = useState<SessionState>({
     status: 'loading',
@@ -30,44 +63,27 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
     error: null,
   });
   const [attempt, setAttempt] = useState(0);
-  const inFlight = useRef(false);
 
   useEffect(() => {
-    if (inFlight.current) return;
-    inFlight.current = true;
     let cancelled = false;
+    setState({ status: 'loading', profile: null, error: null });
 
-    const bootstrap = async () => {
-      setState({ status: 'loading', profile: null, error: null });
-      try {
-        let profile: ProfileMe;
-        try {
-          profile = await api.me();
-        } catch (err) {
-          // No usable identity yet (or a stale token): mint a fresh profile.
-          if (err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) {
-            clearSession();
-            const created = await api.createProfile();
-            storeSession(created.id, created.token);
-            profile = await api.me();
-          } else {
-            throw err;
-          }
-        }
+    bootstrap().then(
+      (profile) => {
         if (!cancelled) setState({ status: 'ready', profile, error: null });
-      } catch (err) {
+      },
+      (err: unknown) => {
         if (cancelled) return;
         const error =
           err instanceof NetworkError || err instanceof ApiError
             ? err
-            : new Error('Unexpected error while starting a session.');
+            : err instanceof Error
+              ? err
+              : new Error('Unexpected error while starting a session.');
         setState({ status: 'error', profile: null, error });
-      } finally {
-        inFlight.current = false;
-      }
-    };
+      },
+    );
 
-    void bootstrap();
     return () => {
       cancelled = true;
     };
@@ -77,8 +93,12 @@ export function SessionProvider({ children }: { children: ReactNode }): JSX.Elem
     () => ({
       ...state,
       profileId: state.status === 'ready' ? state.profile.id : null,
-      retry: () => setAttempt((n) => n + 1),
+      retry: () => {
+        pending = null;
+        setAttempt((n) => n + 1);
+      },
       reset: () => {
+        pending = null;
         clearSession();
         setAttempt((n) => n + 1);
       },

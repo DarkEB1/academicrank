@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useRecommendations } from '@/lib/queries';
+import { useRecommendations, useSeedCount } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import { useDebounced } from '@/lib/hooks';
 import {
@@ -12,7 +12,7 @@ import {
   tradeoffSplit,
 } from '@/lib/diversity';
 import { domainFor, formatAuthors, formatCount, formatYear } from '@/lib/format';
-import { PaperTitle } from '@/components/Math';
+import { MathText, PaperTitle } from '@/components/Math';
 import { ScoreBar } from '@/components/ScoreBar';
 import { CoverageNote, Disclaimer } from '@/components/Honesty';
 import { ErrorState, NoTrustSetYet } from '@/components/States';
@@ -46,7 +46,7 @@ export function RecommendationsScreen(): JSX.Element {
   const items = recs.data?.items ?? [];
   const domain = domainFor(items);
   const runs = groupTies(items);
-  const seeds = profile?.trust_count ?? 0;
+  const seeds = useSeedCount(profileId);
 
   return (
     <div className="space-y-8">
@@ -129,7 +129,7 @@ export function RecommendationsScreen(): JSX.Element {
 
       {recs.isError ? (
         <ErrorState error={recs.error} onRetry={() => void recs.refetch()} />
-      ) : seeds === 0 && !recs.isLoading ? (
+      ) : seeds.count === 0 && !seeds.isLoading && !recs.isLoading ? (
         <NoTrustSetYet what="Recommendation" />
       ) : recs.isLoading ? (
         <LoadingRegion label="Fetching recommendations" className="space-y-4">
@@ -172,9 +172,13 @@ export function RecommendationsScreen(): JSX.Element {
                           {item.venue ? ` · ${item.venue.name}` : ''}
                         </p>
 
-                        <p className="mt-3 max-w-measure border-l-2 border-accent/30 pl-3 text-sm leading-relaxed text-ink">
+                        {/* Server-composed reason; may quote a title containing TeX. */}
+                        <MathText
+                          as="p"
+                          className="mt-3 max-w-measure border-l-2 border-accent/30 pl-3 text-sm leading-relaxed text-ink"
+                        >
                           {item.reason}
-                        </p>
+                        </MathText>
 
                         <div className="mt-3 flex flex-wrap items-center gap-2">
                           <Badge title={`novelty ${item.novelty.toFixed(2)}`}>

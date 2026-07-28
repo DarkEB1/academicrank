@@ -115,7 +115,23 @@ def main() -> int:
     promoted = fetch_by_ids(oa, promote, WORK_FIELDS)
     print(f"  got {len(promoted)}", flush=True)
 
-    print("Hydrating stubs...", flush=True)
+    # The promoted works are full nodes too, so THEIR references also need stubs --
+    # otherwise every citation from a promoted paper to an unknown target dangles and
+    # is dropped at load time. Missing this cost ~56k citation edges on the first run.
+    full_ids = corpus_ids | {short_id(w["id"]) for w in promoted}
+    extra: set[str] = set()
+    for w in promoted:
+        for ref in w.get("referenced_works") or []:
+            rid = short_id(ref)
+            if rid and rid not in full_ids:
+                extra.add(rid)
+    stub_set = set(stub_ids) | extra
+    stub_set -= full_ids
+    print(f"  additional stub targets from promoted works: "
+          f"{len(stub_set) - len(stub_ids)}", flush=True)
+    stub_ids = sorted(stub_set)
+
+    print(f"Hydrating {len(stub_ids)} stubs...", flush=True)
     stubs = fetch_by_ids(oa, stub_ids, STUB_FIELDS)
     print(f"  got {len(stubs)}", flush=True)
 

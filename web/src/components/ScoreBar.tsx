@@ -36,13 +36,17 @@ export function ScoreBar({
   const geo = barGeometry(value, uncertainty, domain);
   const verdict = uncertaintyVerdict(value, uncertainty);
 
-  const description = `${label} ${formatScore(value, uncertainty.stderr)}, 95% interval ${formatInterval(uncertainty)}${
+  const description = `${label} ${formatScore(value, uncertainty.stderr)} plus or minus ${formatScore(
+    uncertainty.stderr,
+    uncertainty.stderr,
+  )}, 95% interval ${formatInterval(uncertainty)} over ${uncertainty.n_samples} samples${
     geo.clipped ? ', interval extends beyond the visible range' : ''
-  }.`;
+  }. ${UNCERTAINTY_COPY[verdict]}`;
 
   return (
     <div className={cn('w-full', className)}>
       <Tooltip
+        visualOnly
         className="w-full"
         content={
           <span className="block space-y-1">
