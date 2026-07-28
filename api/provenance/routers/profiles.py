@@ -118,6 +118,7 @@ def set_trust(
         existing.strength = body.strength
         existing.is_distrust = body.is_distrust
     db.commit()
+    services.invalidate_pool(profile.id)
 
     background.add_task(services.warm_profile, profile.id)
 
@@ -225,6 +226,7 @@ def set_params(
 
     profile.params = {**(profile.params or {}), "context_weights": weights}
     db.commit()
+    services.invalidate_pool(profile.id)
 
     # Re-rank now under the new weights via ranking.compose(): the response proves the
     # dial moved something rather than merely being stored.

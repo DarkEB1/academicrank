@@ -234,19 +234,19 @@ def leave_one_out_uncertainty(
 
 
 def assign_tie_groups(ordered: list[tuple[str, float, Uncertainty]]) -> None:
-    """Walk the ranking in order; nodes whose confidence intervals overlap the current
-    group's representative are marked as the same tie group. Mutates in place."""
+    """Group adjacent items that are not separable given their spread. Mutates in place.
+
+    Pairwise rather than anchored to the head of the group: leave-one-out spreads on
+    small trust sets are large enough that an anchored test collapses the entire
+    ranking into one tie group, which is technically defensible and completely useless
+    to read. Two adjacent items are called tied when their gap is smaller than their
+    mean standard error.
+    """
     group = 0
-    anchor_low = None
     for i, (_node, value, unc) in enumerate(ordered):
-        if i == 0:
-            anchor_low = unc.ci_low
-        else:
-            # a new group starts when this item's upper bound falls below the
-            # group anchor's lower bound -- i.e. they are separable
-            if unc.ci_high < (anchor_low or 0.0):
+        if i > 0:
+            prev_value, prev_unc = ordered[i - 1][1], ordered[i - 1][2]
+            tol = (unc.stderr + prev_unc.stderr) / 2.0
+            if (prev_value - value) > tol:
                 group += 1
-                anchor_low = unc.ci_low
-            else:
-                anchor_low = min(anchor_low if anchor_low is not None else unc.ci_low, unc.ci_low)
         unc.tie_group = group

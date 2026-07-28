@@ -433,12 +433,14 @@ def _score_scratch(
     set instead of the stored one -- so the counterfactual is measured on exactly the
     same footing as the real ranking, uncertainty included.
     """
-    mr = services.mr_of(db)
+    # The adapter is rebuilt per scratch ego: _ScratchEgo.__exit__ commits, which
+    # returns the Connection to the pool and invalidates any MeritRank holding it.
     with _ScratchEgo(db, f"U{prefix}") as ego:
         for wid, w in seeds.items():
             ego.seed(wid, w)
         composed = ranking.compose(
-            ranking._context_scores(mr, ego.name, services.POOL_FETCH), weights)
+            ranking._context_scores(services.mr_of(db), ego.name, services.POOL_FETCH),
+            weights)
 
     positives = [w for w, v in seeds.items() if v > 0]
     loo: dict[str, dict[str, float]] = {}
@@ -449,7 +451,9 @@ def _score_scratch(
                     if wid != skip:
                         sub.seed(wid, w)
                 loo[skip] = ranking.compose(
-                    ranking._context_scores(mr, sub.name, services.POOL_FETCH), weights)
+                    ranking._context_scores(services.mr_of(db), sub.name,
+                                            services.POOL_FETCH),
+                    weights)
 
     if loo:
         unc = leave_one_out_uncertainty(loo, composed)

@@ -17,14 +17,20 @@ Two conventions worth stating once:
 from __future__ import annotations
 
 import bisect
+import datetime as dt
+import hashlib
+import logging
 import math
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence, TypeVar
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.orm import Session
+
+log = logging.getLogger("provenance.services")
 
 from . import config, ranking, schemas
 from .meritrank import MeritRank, Uncertainty
@@ -40,6 +46,36 @@ GLOBAL_FETCH = 4000
 
 def mr_of(db: Session) -> MeritRank:
     return MeritRank(db.connection())
+
+
+# ---------------------------------------------------------------------------
+# Engine resilience
+# ---------------------------------------------------------------------------
+# The service builds a fresh ego's random walks lazily on first read, and while it is
+# doing that over a 74k-node graph a concurrent call can come back as
+# `Service returned Fail` (the connector's catch-all -- the service itself logs
+# nothing). It is transient, so retry it rather than 500 at the user.
+
+T = TypeVar("T")
+
+_RETRY_DELAYS = (1.0, 3.0, 6.0)
+
+
+def engine_retry(db: Session, fn: Callable[[], T], what: str = "engine call") -> T:
+    last: Exception | None = None
+    for i, delay in enumerate((*_RETRY_DELAYS, None)):
+        try:
+            return fn()
+        except (DBAPIError, OperationalError) as e:
+            last = e
+            db.rollback()
+            if delay is None:
+                break
+            log.warning("%s failed (attempt %d), retrying in %.0fs: %s",
+                        what, i + 1, delay, str(e)[:160])
+            time.sleep(delay)
+    assert last is not None
+    raise last
 
 
 # ---------------------------------------------------------------------------
@@ -160,23 +196,32 @@ def disagreement(p_trust: float, p_global: float, p_cit: float) -> float:
 # Global merit
 # ---------------------------------------------------------------------------
 
-_global_ready = False
 _global_lock = threading.Lock()
+_global_cache: dict[int, tuple[float, dict[str, float]]] = {}
+_GLOBAL_TTL = 600.0
 
 
 def global_scores(db: Session, limit: int = GLOBAL_FETCH) -> dict[str, float]:
     """work_id -> unpersonalised merit, from the synthetic global ego.
 
     `mr_bulk_load_edges` clears engine state, so the global ego can vanish under us at
-    any time. If the read comes back empty we re-seed once and retry -- that is the
-    only reliable way to detect a rebuild without polling.
+    any time. If the read comes back empty we re-seed and retry -- that is the only
+    reliable way to detect a rebuild without polling. Seeding is 200 `mr_put_edge`
+    calls, so the result is cached against the graph generation.
     """
-    global _global_ready
-    mr = mr_of(db)
+    generation = graph_generation(db)
+    now = time.time()
+    with _global_lock:
+        hit = _global_cache.get(generation)
+        if hit is not None and now - hit[0] < _GLOBAL_TTL:
+            return hit[1]
 
+    # NB: the adapter is rebuilt on every call rather than captured. `Session.commit()`
+    # and `.rollback()` release the underlying Connection back to the pool, so a
+    # MeritRank instance that outlives either one is holding a closed connection.
     def _read() -> dict[str, float]:
-        rows = mr.scores(ranking.GLOBAL_EGO, context=config.AGGREGATE,
-                         limit=limit, kind="User")
+        rows = mr_of(db).scores(ranking.GLOBAL_EGO, context=config.AGGREGATE,
+                                limit=limit, kind="User")
         out: dict[str, float] = {}
         for s in rows:
             wid = node_to_work_id(s.node)
@@ -184,18 +229,16 @@ def global_scores(db: Session, limit: int = GLOBAL_FETCH) -> dict[str, float]:
                 out[wid] = s.value
         return out
 
-    with _global_lock:
-        need_seed = not _global_ready
-    if not need_seed:
-        scores = _read()
-        if scores:
-            return scores
+    scores = engine_retry(db, _read, "global scores")
+    if not scores:
+        engine_retry(db, lambda: ranking.ensure_global_ego(db), "ensure_global_ego")
+        db.commit()
+        scores = engine_retry(db, _read, "global scores (after seeding)")
 
-    ranking.ensure_global_ego(db)
-    db.commit()
     with _global_lock:
-        _global_ready = True
-    return _read()
+        _global_cache.clear()
+        _global_cache[generation] = (now, scores)
+    return scores
 
 
 # ---------------------------------------------------------------------------
@@ -257,28 +300,77 @@ class Pool:
         return {i.work_id: i for i in self.items}
 
 
+# A full pass costs ~5s per context set, and rank_profile also runs one leave-one-out
+# replicate per seed, so a cold 6-seed profile is ~30s of engine time. Every endpoint
+# in the contract needs the same pool, and several need it more than once, so it is
+# cached on the exact inputs that determine it: the trust set, the weights, the
+# exclusion flag, and the graph generation. Any change to any of those is a new key --
+# there is no staleness window to reason about.
+_POOL_TTL = 600.0
+_POOL_MAX = 64
+_pool_cache: dict[tuple, tuple[float, Pool]] = {}
+_pool_lock = threading.Lock()
+
+
+def graph_generation(db: Session) -> int:
+    """Changes whenever scripts/build_graph.py reloads the edge list, which also clears
+    engine state -- so it invalidates every cached score."""
+    return int(db.execute(text("SELECT coalesce(max(id), 0) FROM graph_edges"))
+               .scalar_one())
+
+
+def trust_signature(db: Session, profile: Profile) -> tuple[str, int]:
+    rows = db.execute(
+        text("SELECT work_id, strength, is_distrust FROM trust "
+             "WHERE profile_id = :p ORDER BY work_id"),
+        {"p": profile.id},
+    ).all()
+    digest = hashlib.sha1(repr([tuple(r) for r in rows]).encode()).hexdigest()[:16]
+    return digest, len(rows)
+
+
+def invalidate_pool(profile_id: str) -> None:
+    with _pool_lock:
+        for key in [k for k in _pool_cache if k[0] == profile_id]:
+            _pool_cache.pop(key, None)
+
+
 def build_pool(
     db: Session,
     profile: Profile,
     context: str = "aggregate",
     exclude_trusted: bool = True,
 ) -> Pool:
+    sig, n_trust = trust_signature(db, profile)
     # An ego with no edges does not exist in the engine, so asking it for scores is a
     # question about a node that was never registered. Short-circuit instead.
-    if db.query(Trust).filter(Trust.profile_id == profile.id).count() == 0:
+    if n_trust == 0:
         return Pool(items=[], total=0, seeds=0, elapsed_ms=0.0)
 
     weights = weights_for_context(profile, context)
-    items, total, seeds, elapsed = ranking.rank_profile(
-        db, profile, limit=POOL_FETCH, offset=0,
-        weights=weights, exclude_trusted=exclude_trusted, fetch=POOL_FETCH,
+    key = (
+        profile.id, sig, exclude_trusted, graph_generation(db),
+        tuple(sorted(weights.items())),
     )
+    now = time.time()
+    with _pool_lock:
+        hit = _pool_cache.get(key)
+        if hit is not None and now - hit[0] < _POOL_TTL:
+            return hit[1]
+
+    def _run():
+        return ranking.rank_profile(
+            db, profile, limit=POOL_FETCH, offset=0,
+            weights=weights, exclude_trusted=exclude_trusted, fetch=POOL_FETCH,
+        )
+
+    items, total, seeds, elapsed = engine_retry(db, _run, "rank_profile")
     db.commit()
 
     trust_values = {i.work_id: i.trust for i in items}
     gvals_all = global_scores(db, GLOBAL_FETCH)
     gvals = {wid: gvals_all.get(wid, 0.0) for wid in trust_values}
-    return Pool(
+    pool = Pool(
         items=items,
         total=total,
         seeds=seeds,
@@ -288,6 +380,13 @@ def build_pool(
         global_values=gvals,
         global_pct=rank_percentiles(gvals),
     )
+
+    with _pool_lock:
+        if len(_pool_cache) >= _POOL_MAX:
+            oldest = min(_pool_cache, key=lambda k: _pool_cache[k][0])
+            _pool_cache.pop(oldest, None)
+        _pool_cache[key] = (now, pool)
+    return pool
 
 
 def to_uncertainty(u: Uncertainty) -> schemas.Uncertainty:
@@ -547,16 +646,19 @@ def warm_profile(profile_id: str) -> None:
             return
         try:
             ranking.ensure_seeded(db, prof)
-            mr = mr_of(db)
-            # A single scores() call is what actually forces walk construction; the
-            # engine builds walks lazily per ego on first read after a bulk load.
-            mr.scores(profile_node(prof.id), context=config.BASELINE_CONTEXT,
-                      limit=1, kind="User")
-            prof.warmed_at = __import__("datetime").datetime.now(
-                __import__("datetime").timezone.utc
-            ).replace(tzinfo=None)
+            # A scores() call is what actually forces walk construction: the engine
+            # builds walks lazily per ego on first read after a bulk load.
+            mr_of(db).scores(profile_node(prof.id), context=config.BASELINE_CONTEXT,
+                             limit=1, kind="User")
+            db.commit()
+            # Then pay the full ranking cost here, off the request path, so the user's
+            # next read comes out of the pool cache instead of taking ~90s.
+            invalidate_pool(prof.id)
+            build_pool(db, prof, context="aggregate", exclude_trusted=True)
+            prof.warmed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
             db.commit()
         except Exception:  # noqa: BLE001 - a failed warm must never break the request
+            log.warning("warm failed for %s", profile_id, exc_info=True)
             db.rollback()
 
 

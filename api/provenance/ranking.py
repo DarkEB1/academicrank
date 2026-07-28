@@ -127,6 +127,50 @@ def compose(
     return out
 
 
+# --- cache -----------------------------------------------------------------------
+# A full ranking costs one mr_scores call per context, plus one per context per seed
+# for leave-one-out -- ~30 calls for a 5-seed profile, and each builds walks lazily on
+# the engine side. Measured cold: ~16.5s. The Phase 3 gate is <500ms warm, so the raw
+# per-context scores are cached per (profile, trust-set) and only the (cheap) weighted
+# composition is redone when the user drags a slider. That also makes the parameter
+# playground genuinely live.
+_CACHE: dict[str, tuple[str, dict[str, dict[str, float]], dict[str, dict[str, float]]]] = {}
+_CACHE_MAX = 64
+
+
+def trust_signature(db: Session, profile: Profile) -> str:
+    rows = db.query(Trust).filter(Trust.profile_id == profile.id).all()
+    return "|".join(sorted(f"{t.work_id}:{t.strength}:{int(t.is_distrust)}" for t in rows))
+
+
+def invalidate(profile_id: str) -> None:
+    _CACHE.pop(profile_id, None)
+
+
+def _scores_cached(
+    db: Session, profile: Profile, fetch: int
+) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]], int]:
+    """Returns (per_context, leave_one_out, seed_count), cached on the trust set."""
+    sig = trust_signature(db, profile)
+    hit = _CACHE.get(profile.id)
+    if hit and hit[0] == sig:
+        return hit[1], hit[2], len([s for s in sig.split("|") if s and not s.endswith(":1")])
+
+    mr = _mr(db)
+    seeds = ensure_seeded(db, profile)
+    per_ctx = _context_scores(mr, profile_node(profile.id), fetch)
+    loo = _leave_one_out(db, profile, None, fetch) if 2 <= seeds <= 12 else {}
+    if len(_CACHE) >= _CACHE_MAX:
+        _CACHE.pop(next(iter(_CACHE)))
+    _CACHE[profile.id] = (sig, per_ctx, loo)
+    return per_ctx, loo, seeds
+
+
+def warm(db: Session, profile: Profile, fetch: int = 4000) -> None:
+    """Called on trust-set save so the first page view is not the slow one."""
+    _scores_cached(db, profile, fetch)
+
+
 def rank_profile(
     db: Session,
     profile: Profile,
@@ -138,17 +182,15 @@ def rank_profile(
 ) -> tuple[list[RankedItem], int, int, float]:
     """Returns (items, total, seed_count, elapsed_ms)."""
     t0 = time.time()
-    mr = _mr(db)
-    ego = profile_node(profile.id)
-    seeds = ensure_seeded(db, profile)
-
-    per_ctx = _context_scores(mr, ego, fetch)
+    per_ctx, loo_raw, seeds = _scores_cached(db, profile, fetch)
     composed = compose(per_ctx, weights)
 
     trusted = {t.work_id for t in db.query(Trust).filter(Trust.profile_id == profile.id)}
 
-    # leave-one-out: re-rank with each seed removed in turn.
-    loo = _leave_one_out(db, profile, weights, fetch) if 2 <= seeds <= 12 else {}
+    # leave-one-out replicates are cached as raw per-context scores, so re-composing
+    # them under the current weights is pure arithmetic.
+    loo = {seed: compose(per_ctx_variant, weights)
+           for seed, per_ctx_variant in loo_raw.items()}
     unc = leave_one_out_uncertainty(loo, composed) if loo else {
         n: Uncertainty(abs(v) * 0.5, max(0.0, v * 0.5), v * 1.5, 0, "leave_one_out", max(seeds, 1))
         for n, v in composed.items()
@@ -171,14 +213,18 @@ def rank_profile(
 
 def _leave_one_out(
     db: Session, profile: Profile, weights: dict[str, float] | None, fetch: int
-) -> dict[str, dict[str, float]]:
+) -> dict[str, dict[str, dict[str, float]]]:
     """Re-rank with each seed removed, using a scratch ego so the user's own ego is
     never mutated. Bounded to trust sets of 12 or fewer -- beyond that the cost is not
-    worth it and the spread is small anyway."""
+    worth it and the spread is small anyway.
+
+    Returns RAW per-context scores per removed seed (not composed), so the cache can
+    re-compose them under whatever context weights the user later chooses.
+    """
     mr = _mr(db)
     rows = [t for t in db.query(Trust).filter(
         Trust.profile_id == profile.id, Trust.is_distrust.is_(False)).all()]
-    out: dict[str, dict[str, float]] = {}
+    out: dict[str, dict[str, dict[str, float]]] = {}
     scratch = f"Uloo_{profile.id}"
     for skip in rows:
         for t in rows:
@@ -186,7 +232,7 @@ def _leave_one_out(
                 continue
             mr.put_edge(scratch, work_node(t.work_id),
                         config.TRUST_STRENGTH_SCALE.get(t.strength, 0.7), config.AGGREGATE)
-        out[skip.work_id] = compose(_context_scores(mr, scratch, fetch), weights)
+        out[skip.work_id] = _context_scores(mr, scratch, fetch)
         for t in rows:
             if t.work_id != skip.work_id:
                 mr.delete_edge(scratch, work_node(t.work_id), config.AGGREGATE)

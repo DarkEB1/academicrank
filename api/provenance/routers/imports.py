@@ -149,6 +149,7 @@ async def import_bibtex(
                      strength=IMPORT_STRENGTH, is_distrust=False))
         added += 1
     db.commit()
+    services.invalidate_pool(profile.id)
 
     if added:
         services.warm_profile(profile.id)
