@@ -1,0 +1,222 @@
+"""SQLAlchemy 2.0 models.
+
+Node-name convention is dictated by the engine, not by us -- see DECISIONS.md D1.2/D1.6.
+Papers are `U` nodes; authors/institutions/topics/venues are `B` nodes. The helpers at
+the bottom are the single source of truth for that mapping.
+"""
+from __future__ import annotations
+
+import datetime as dt
+from typing import Optional
+
+from sqlalchemy import (
+    BigInteger, Boolean, Column, Date, Float, ForeignKey, Index, Integer,
+    SmallInteger, String, Text, UniqueConstraint, func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+# --------------------------------------------------------------------------
+# Corpus
+# --------------------------------------------------------------------------
+
+class Work(Base):
+    __tablename__ = "works"
+
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)  # e.g. W2963757046
+    title: Mapped[Optional[str]] = mapped_column(Text)
+    abstract: Mapped[Optional[str]] = mapped_column(Text)
+    year: Mapped[Optional[int]] = mapped_column(SmallInteger, index=True)
+    publication_date: Mapped[Optional[dt.date]] = mapped_column(Date)
+    cited_by_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    doi: Mapped[Optional[str]] = mapped_column(Text)
+    type: Mapped[Optional[str]] = mapped_column(String(48))
+    language: Mapped[Optional[str]] = mapped_column(String(8))
+    is_oa: Mapped[bool] = mapped_column(Boolean, default=False)
+    # A stub is a work referenced by fewer than 3 corpus papers: we keep id/title/year
+    # so citation edges don't dangle, but it has no authorships/topics of its own.
+    is_stub: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    venue_id: Mapped[Optional[str]] = mapped_column(ForeignKey("venues.id", ondelete="SET NULL"), index=True)
+    # in-corpus reference count, denormalised for cheap stats/UI
+    ref_count: Mapped[int] = mapped_column(Integer, default=0)
+    in_corpus_cited_by: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSONB)
+    tsv: Mapped[Optional[str]] = mapped_column(TSVECTOR)
+
+    venue = relationship("Venue", lazy="joined")
+
+    __table_args__ = (
+        Index("ix_works_tsv", "tsv", postgresql_using="gin"),
+        Index("ix_works_title_trgm", "title", postgresql_using="gin",
+              postgresql_ops={"title": "gin_trgm_ops"}),
+    )
+
+
+class Author(Base):
+    __tablename__ = "authors"
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    display_name: Mapped[Optional[str]] = mapped_column(Text)
+    works_count: Mapped[int] = mapped_column(Integer, default=0)
+    cited_by_count: Mapped[int] = mapped_column(BigInteger, default=0)
+    orcid: Mapped[Optional[str]] = mapped_column(Text)
+    # number of corpus papers this author is on -- drives hub damping
+    corpus_degree: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
+
+class Institution(Base):
+    __tablename__ = "institutions"
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    display_name: Mapped[Optional[str]] = mapped_column(Text)
+    ror: Mapped[Optional[str]] = mapped_column(Text)
+    country_code: Mapped[Optional[str]] = mapped_column(String(8))
+    corpus_degree: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
+
+class Topic(Base):
+    __tablename__ = "topics"
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    display_name: Mapped[Optional[str]] = mapped_column(Text)
+    subfield: Mapped[Optional[str]] = mapped_column(Text)
+    field: Mapped[Optional[str]] = mapped_column(Text)
+    domain: Mapped[Optional[str]] = mapped_column(Text)
+    corpus_degree: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    # log(N/df): a niche subfield is worth far more than "Mathematics"
+    idf: Mapped[float] = mapped_column(Float, default=1.0)
+
+
+class Venue(Base):
+    __tablename__ = "venues"
+    id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    display_name: Mapped[Optional[str]] = mapped_column(Text)
+    type: Mapped[Optional[str]] = mapped_column(String(32))
+    issn_l: Mapped[Optional[str]] = mapped_column(String(16))
+    publisher: Mapped[Optional[str]] = mapped_column(Text)
+    corpus_degree: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
+
+class WorkAuthor(Base):
+    __tablename__ = "work_authors"
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id", ondelete="CASCADE"), primary_key=True)
+    author_id: Mapped[str] = mapped_column(ForeignKey("authors.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(SmallInteger, default=0)
+
+
+class WorkInstitution(Base):
+    __tablename__ = "work_institutions"
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id", ondelete="CASCADE"), primary_key=True)
+    institution_id: Mapped[str] = mapped_column(ForeignKey("institutions.id", ondelete="CASCADE"), primary_key=True)
+
+
+class WorkTopic(Base):
+    __tablename__ = "work_topics"
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id", ondelete="CASCADE"), primary_key=True)
+    topic_id: Mapped[str] = mapped_column(ForeignKey("topics.id", ondelete="CASCADE"), primary_key=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class Citation(Base):
+    __tablename__ = "citations"
+    src_id: Mapped[str] = mapped_column(ForeignKey("works.id", ondelete="CASCADE"), primary_key=True)
+    dst_id: Mapped[str] = mapped_column(ForeignKey("works.id", ondelete="CASCADE"), primary_key=True)
+    __table_args__ = (Index("ix_citations_dst", "dst_id"),)
+
+
+# --------------------------------------------------------------------------
+# Derived graph
+# --------------------------------------------------------------------------
+
+class GraphEdge(Base):
+    """Materialised edge list.
+
+    This is what gets pushed to MeritRank via mr_bulk_load_edges, and it is also what
+    /explain walks to reconstruct contributing paths -- the engine will not hand back
+    paths, so we reconstruct them over exactly the same edge data. Keeping one table
+    for both guarantees the explanation matches the graph that produced the score.
+    """
+    __tablename__ = "graph_edges"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    src: Mapped[str] = mapped_column(String(32), index=True)   # engine node name
+    dst: Mapped[str] = mapped_column(String(32), index=True)
+    weight: Mapped[float] = mapped_column(Float)
+    context: Mapped[str] = mapped_column(String(32), index=True)
+    relation: Mapped[str] = mapped_column(String(32), index=True)
+    __table_args__ = (
+        UniqueConstraint("src", "dst", "context", name="uq_graph_edge"),
+    )
+
+
+# --------------------------------------------------------------------------
+# Users
+# --------------------------------------------------------------------------
+
+class Profile(Base):
+    __tablename__ = "profiles"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    label: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(server_default=func.now())
+    # context weights + exposed decay params
+    params: Mapped[Optional[dict]] = mapped_column(JSONB)
+    warmed_at: Mapped[Optional[dt.datetime]] = mapped_column()
+
+    @property
+    def node(self) -> str:
+        return profile_node(self.id)
+
+
+class Trust(Base):
+    __tablename__ = "trust"
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), primary_key=True)
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id", ondelete="CASCADE"), primary_key=True)
+    # 1..5 for trust; distrust carries its own flag (see DECISIONS.md on negative edges)
+    strength: Mapped[int] = mapped_column(SmallInteger, default=3)
+    is_distrust: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(server_default=func.now())
+
+
+class ReadMark(Base):
+    __tablename__ = "read_marks"
+    profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), primary_key=True)
+    work_id: Mapped[str] = mapped_column(ForeignKey("works.id", ondelete="CASCADE"), primary_key=True)
+
+
+# --------------------------------------------------------------------------
+# Engine node-name mapping (single source of truth)
+# --------------------------------------------------------------------------
+# The engine derives node kind from the FIRST CHARACTER of the name, and rejects
+# NonUser->NonUser edges outright. Papers must therefore be `U`. See DECISIONS.md D1.6.
+
+def work_node(work_id: str) -> str:
+    return f"U{work_id}"
+
+
+def profile_node(profile_id: str) -> str:
+    return f"Uprofile_{profile_id}"
+
+
+def author_node(author_id: str) -> str:
+    return f"BA{author_id[1:]}" if author_id.startswith("A") else f"BA{author_id}"
+
+
+def institution_node(inst_id: str) -> str:
+    return f"BI{inst_id[1:]}" if inst_id.startswith("I") else f"BI{inst_id}"
+
+
+def topic_node(topic_id: str) -> str:
+    return f"BT{topic_id[1:]}" if topic_id.startswith("T") else f"BT{topic_id}"
+
+
+def venue_node(venue_id: str) -> str:
+    return f"BS{venue_id[1:]}" if venue_id.startswith("S") else f"BS{venue_id}"
+
+
+def node_to_work_id(node: str) -> str | None:
+    """Inverse of work_node(); None if the node is not a paper."""
+    if node.startswith("U") and not node.startswith("Uprofile_"):
+        return node[1:]
+    return None

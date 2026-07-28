@@ -1,0 +1,99 @@
+services:
+  mr-service:
+    hostname: meritrank
+    # Built from vendored source, NOT the published v0.4.0 image: that image has no
+    # mr_bulk_load_edges and cannot parse a hostname service URL. See DECISIONS.md D2.
+    build:
+      context: ./vendor/meritrank-rust
+      dockerfile: service/Dockerfile
+    image: provenance/mr-service:local
+    restart: unless-stopped
+    networks:
+      backend:
+        ipv4_address: 172.28.0.10
+    environment:
+      MERITRANK_SERVER_ADDRESS: "0.0.0.0"
+      MERITRANK_SERVER_PORT: "10234"
+      MERITRANK_SERVICE_URL: "tcp://meritrank:10234"
+      # --- tuning surface (see DECISIONS.md D1.7 / KNOWN_ISSUES.md) ---
+      MERITRANK_NUM_WALKS: "10000"
+      MERITRANK_ALPHA: "0.85"
+      MERITRANK_ZERO_OPINION_FACTOR: "0.0"
+      MERITRANK_SCORES_CACHE_SIZE: "65536"
+      MERITRANK_SCORES_CACHE_TIMEOUT: "3600"
+      MERITRANK_SUBGRAPH_QUEUE_CAPACITY: "4096"
+      VSIDS_BUMP: "1.03"
+    ports: ["10234:10234"]
+
+  db:
+    hostname: postgres
+    build:
+      context: ./vendor/meritrank-rust
+      dockerfile: psql-connector/Dockerfile
+    image: provenance/mr-psql-connector:local
+    restart: unless-stopped
+    depends_on: [mr-service]
+    networks: [backend]
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: provenance
+      MERITRANK_SERVICE_URL: "tcp://meritrank:10234"
+      MERITRANK_RECV_TIMEOUT_MSEC: "600000"
+    command: >-
+      postgres
+      -c max_connections=200
+      -c shared_buffers=512MB
+      -c work_mem=64MB
+      -c maintenance_work_mem=512MB
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init/10_provenance.sql:/docker-entrypoint-initdb.d/10_provenance.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d provenance"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: provenance/api:local
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [backend]
+    environment:
+      DATABASE_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/provenance"
+      PROVENANCE_AUTOLOAD: "1"
+    volumes:
+      - ./data:/app/data:ro
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health')\""]
+      interval: 10s
+      timeout: 10s
+      retries: 60
+      start_period: 180s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: provenance/web:local
+    restart: unless-stopped
+    depends_on: [api]
+    networks: [backend]
+    ports: ["5173:80"]
+
+networks:
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  pgdata:

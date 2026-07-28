@@ -1,0 +1,107 @@
+@import 'katex/dist/katex.min.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light: warm paper, ink black. Designed, not "white". */
+    --canvas: 40 30% 97%;
+    --surface: 40 40% 99%;
+    --raised: 40 24% 94%;
+    --ink: 30 10% 12%;
+    --ink-muted: 30 6% 38%;
+    --ink-faint: 30 5% 55%;
+    --rule: 36 14% 87%;
+    --rule-strong: 36 12% 74%;
+    --accent: 212 46% 33%;
+    --accent-ink: 212 52% 26%;
+    --accent-wash: 212 44% 93%;
+    --caution: 28 62% 34%;
+    --caution-wash: 36 70% 92%;
+    --critical: 356 54% 40%;
+    --positive: 158 40% 30%;
+
+    --focus: 212 60% 45%;
+  }
+
+  .dark {
+    /* Dark: cool slate ground, warm off-white ink. Not an inversion. */
+    --canvas: 220 16% 8%;
+    --surface: 220 14% 11%;
+    --raised: 220 13% 15%;
+    --ink: 40 16% 91%;
+    --ink-muted: 220 9% 64%;
+    --ink-faint: 220 8% 50%;
+    --rule: 220 11% 20%;
+    --rule-strong: 220 10% 30%;
+    --accent: 205 62% 66%;
+    --accent-ink: 205 70% 78%;
+    --accent-wash: 208 34% 18%;
+    --caution: 36 66% 63%;
+    --caution-wash: 34 30% 16%;
+    --critical: 356 62% 66%;
+    --positive: 158 38% 58%;
+
+    --focus: 205 70% 62%;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-feature-settings: 'kern' 1, 'liga' 1;
+  }
+
+  * {
+    border-color: hsl(var(--rule));
+  }
+
+  :focus-visible {
+    outline: 2px solid hsl(var(--focus));
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background: hsl(var(--accent) / 0.22);
+  }
+
+  /* Tabular numerals everywhere a number is compared against another number. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .rule-hairline {
+    box-shadow: inset 0 -1px 0 0 hsl(var(--rule));
+  }
+
+  .link {
+    @apply text-accent underline decoration-accent/30 underline-offset-2 hover:decoration-accent;
+  }
+
+  /* KaTeX should inherit the surrounding type colour and not blow up line height. */
+  .katex {
+    font-size: 1em;
+    color: inherit;
+  }
+
+  .katex-display {
+    margin: 0.6em 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

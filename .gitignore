@@ -1,0 +1,9 @@
+data/cache/
+data/raw/
+.build-logs/
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+web/dist/
+.env
