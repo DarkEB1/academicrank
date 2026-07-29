@@ -312,6 +312,8 @@ _POOL_TTL = 600.0
 _POOL_MAX = 64
 _pool_cache: dict[tuple, tuple[float, Pool]] = {}
 _pool_lock = threading.Lock()
+# key -> lock held by whichever caller is currently computing that pool (see build_pool)
+_inflight: dict[tuple, threading.Lock] = {}
 
 
 def graph_generation(db: Session) -> int:
@@ -332,9 +334,58 @@ def trust_signature(db: Session, profile: Profile) -> tuple[str, int]:
 
 
 def invalidate_pool(profile_id: str) -> None:
+    """Drop the *composed* pool for a profile.
+
+    Deliberately does not touch `ranking._CACHE`. That cache holds raw per-context
+    scores, which depend only on the trust set -- re-composing them under new weights
+    is pure arithmetic (see ranking.rank_profile). Clearing it on a weight change would
+    force a full engine recomputation for /params, which is precisely the work the
+    two-level split exists to avoid.
+    """
     with _pool_lock:
         for key in [k for k in _pool_cache if k[0] == profile_id]:
             _pool_cache.pop(key, None)
+
+
+def invalidate_scores(profile_id: str) -> None:
+    """Drop everything for a profile, including the raw per-context scores. Used when
+    the trust set itself changes, since that is what those scores are computed from."""
+    invalidate_pool(profile_id)
+    ranking.invalidate(profile_id)
+    with _dist_lock:
+        for key in [k for k in _dist_cache if k[0] == profile_id]:
+            _dist_cache.pop(key, None)
+
+
+_seen_generation: int | None = None
+
+
+def _check_generation(db: Session, current_profile_id: str) -> int:
+    """Drop every cached score when the graph is rebuilt.
+
+    `ranking.py` caches raw per-context scores against the trust signature alone, which
+    cannot see a `scripts/build_graph.py` reload -- and a reload calls
+    `mr_bulk_load_edges`, which clears all engine state and invalidates every score in
+    both layers. The persisted edge list is the one thing that changes observably, so
+    it is the generation marker.
+    """
+    global _seen_generation
+    generation = graph_generation(db)
+    with _pool_lock:
+        stale = _seen_generation is not None and _seen_generation != generation
+        known = {k[0] for k in _pool_cache} if stale else set()
+        if stale:
+            _pool_cache.clear()
+        _seen_generation = generation
+    if stale:
+        with _global_lock:
+            _global_cache.clear()
+        with _dist_lock:
+            _dist_cache.clear()
+        for pid in known | {current_profile_id}:
+            ranking.invalidate(pid)
+        log.info("graph generation changed to %s; cleared all score caches", generation)
+    return generation
 
 
 def build_pool(
@@ -351,7 +402,7 @@ def build_pool(
 
     weights = weights_for_context(profile, context)
     key = (
-        profile.id, sig, exclude_trusted, graph_generation(db),
+        profile.id, sig, exclude_trusted, _check_generation(db, profile.id),
         tuple(sorted(weights.items())),
     )
     now = time.time()
@@ -359,36 +410,54 @@ def build_pool(
         hit = _pool_cache.get(key)
         if hit is not None and now - hit[0] < _POOL_TTL:
             return hit[1]
+        # Single-flight. A background warm and the user's own read routinely ask for
+        # the same pool at the same moment; without this they both pay the full
+        # multi-minute engine cost and compete for the service while doing it. Callers
+        # after the first wait on the lock and then find the result in the cache.
+        # Sessions are per-request, so blocking here holds no database resources.
+        gate = _inflight.setdefault(key, threading.Lock())
 
-    def _run():
-        return ranking.rank_profile(
-            db, profile, limit=POOL_FETCH, offset=0,
-            weights=weights, exclude_trusted=exclude_trusted, fetch=POOL_FETCH,
-        )
+    # Everything from the re-check to the cache write happens under `gate`, so a waiter
+    # released by the winner always finds the finished pool rather than starting its own.
+    with gate:
+        try:
+            with _pool_lock:
+                hit = _pool_cache.get(key)
+                if hit is not None and time.time() - hit[0] < _POOL_TTL:
+                    return hit[1]
 
-    items, total, seeds, elapsed = engine_retry(db, _run, "rank_profile")
-    db.commit()
+            def _run():
+                return ranking.rank_profile(
+                    db, profile, limit=POOL_FETCH, offset=0,
+                    weights=weights, exclude_trusted=exclude_trusted, fetch=POOL_FETCH,
+                )
 
-    trust_values = {i.work_id: i.trust for i in items}
-    gvals_all = global_scores(db, GLOBAL_FETCH)
-    gvals = {wid: gvals_all.get(wid, 0.0) for wid in trust_values}
-    pool = Pool(
-        items=items,
-        total=total,
-        seeds=seeds,
-        elapsed_ms=elapsed,
-        trust_values=trust_values,
-        trust_pct=rank_percentiles(trust_values),
-        global_values=gvals,
-        global_pct=rank_percentiles(gvals),
-    )
+            items, total, seeds, elapsed = engine_retry(db, _run, "rank_profile")
+            db.commit()
 
-    with _pool_lock:
-        if len(_pool_cache) >= _POOL_MAX:
-            oldest = min(_pool_cache, key=lambda k: _pool_cache[k][0])
-            _pool_cache.pop(oldest, None)
-        _pool_cache[key] = (now, pool)
-    return pool
+            trust_values = {i.work_id: i.trust for i in items}
+            gvals_all = global_scores(db, GLOBAL_FETCH)
+            gvals = {wid: gvals_all.get(wid, 0.0) for wid in trust_values}
+            pool = Pool(
+                items=items,
+                total=total,
+                seeds=seeds,
+                elapsed_ms=elapsed,
+                trust_values=trust_values,
+                trust_pct=rank_percentiles(trust_values),
+                global_values=gvals,
+                global_pct=rank_percentiles(gvals),
+            )
+
+            with _pool_lock:
+                if len(_pool_cache) >= _POOL_MAX:
+                    oldest = min(_pool_cache, key=lambda k: _pool_cache[k][0])
+                    _pool_cache.pop(oldest, None)
+                _pool_cache[key] = (time.time(), pool)
+            return pool
+        finally:
+            with _pool_lock:
+                _inflight.pop(key, None)
 
 
 def to_uncertainty(u: Uncertainty) -> schemas.Uncertainty:
@@ -436,6 +505,30 @@ def scored_page(
 # ---------------------------------------------------------------------------
 # Cold start
 # ---------------------------------------------------------------------------
+
+
+_stub_cache: tuple[int, set[str]] | None = None
+_stub_lock = threading.Lock()
+
+
+def stub_ids(db: Session) -> set[str]:
+    """Stub work ids, cached against the corpus size.
+
+    `ranking.rank_profile` excludes stubs from results (they are 89,540 of 96,751
+    works and carry no metadata a reader can use). Anything that ranks outside
+    `rank_profile` -- the simulation's scratch ego -- has to apply the same filter, or
+    `before` and `after` are not comparable.
+    """
+    global _stub_cache
+    n = int(db.execute(text("SELECT count(*) FROM works")).scalar_one())
+    with _stub_lock:
+        if _stub_cache is not None and _stub_cache[0] == n:
+            return _stub_cache[1]
+    ids = {r[0] for r in db.execute(
+        text("SELECT id FROM works WHERE is_stub = true")).all()}
+    with _stub_lock:
+        _stub_cache = (n, ids)
+    return ids
 
 
 def cold_start(seeds: int) -> schemas.ColdStart:
@@ -652,13 +745,43 @@ def trust_entries(db: Session, profile: Profile) -> list[schemas.TrustEntry]:
     ]
 
 
-def warm_profile(profile_id: str) -> None:
-    """Background warm: re-seed the ego and force the engine to build its walks.
+# Warming is debounced per profile. Building a trust set is a burst of single-paper
+# POSTs, and a full warm is one engine pass plus one leave-one-out replicate per seed;
+# warming eagerly on each one would queue six increasingly-stale full rankings and
+# starve the request path -- each invalidating the work the previous one just did.
+# Instead every request bumps a counter, the task waits out the burst, and only the
+# newest scheduled warm for a profile does any work.
+_WARM_DEBOUNCE = 3.0
+_warm_seq: dict[str, int] = {}
+_warm_lock = threading.Lock()
 
-    Called after every trust mutation. Uses its own session because it outlives the
-    request that scheduled it.
+
+def schedule_warm(profile_id: str) -> None:
+    """Kick off a warm on a detached daemon thread.
+
+    Deliberately *not* a FastAPI BackgroundTask. A background task runs inside the
+    ASGI call, so the server keeps that task open until it finishes -- and a warm is
+    minutes of engine time. It also makes the endpoint untestable: Starlette's
+    TestClient waits for background tasks, so a fixture that trusts six papers would
+    serialise six full warms before its first assertion.
     """
+    threading.Thread(target=warm_profile, args=(profile_id,),
+                     name=f"warm-{profile_id[:8]}", daemon=True).start()
+
+
+def warm_profile(profile_id: str) -> None:
+    """Re-seed the ego and force the engine to build its walks, then fill the pool
+    cache. Uses its own session because it outlives the request that scheduled it."""
     from .db import SessionLocal
+
+    with _warm_lock:
+        seq = _warm_seq.get(profile_id, 0) + 1
+        _warm_seq[profile_id] = seq
+
+    time.sleep(_WARM_DEBOUNCE)
+    with _warm_lock:
+        if _warm_seq.get(profile_id) != seq:
+            return  # a newer mutation arrived; that task will do the work
 
     with SessionLocal() as db:
         prof = db.get(Profile, profile_id)
@@ -672,8 +795,7 @@ def warm_profile(profile_id: str) -> None:
                              limit=1, kind="User")
             db.commit()
             # Then pay the full ranking cost here, off the request path, so the user's
-            # next read comes out of the pool cache instead of taking ~90s.
-            invalidate_pool(prof.id)
+            # next read comes out of the pool cache instead of taking minutes.
             build_pool(db, prof, context="aggregate", exclude_trusted=True)
             prof.warmed_at = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
             db.commit()

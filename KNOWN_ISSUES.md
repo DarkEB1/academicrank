@@ -244,3 +244,33 @@ query path the end-to-end suite was already running against.
 
 Practical effect: users must scan a few results rather than getting the paper they typed.
 DEMO.md therefore states which result position to take for each seed.
+
+---
+
+## 14. The engine serialises work; this stack serves one user
+
+`mr-service` processes requests one at a time and builds an ego's random walks lazily on
+first read. A new profile's first ranking is **40-90 seconds** of walk building
+(measured 40.6s, 52.4s, 56.7s, 71.1s, 74.5s across runs), and concurrent cold starts
+queue behind each other rather than running in parallel.
+
+This was measured the hard way: probing the engine while the end-to-end suite was
+driving it returned 0 rows and a 10-minute timeout, both of which looked like data
+corruption and were pure contention. Re-run in isolation the same calls answered in
+~0.1s.
+
+**Consequence:** this is a single-user demo. Two people hitting it with fresh trust sets
+at the same time will both wait. Serving several would need a request queue with
+per-ego workers, or a much lower `MERITRANK_NUM_WALKS`, and neither was attempted.
+It is warmed on trust-set save so the cost lands where the user expects to wait.
+
+---
+
+## 15. Not covered by any test
+
+Recorded rather than quietly omitted. Reachable in the UI and exercised by unit tests,
+but never driven end to end: **distrust edges**, **BibTeX import**, and the
+**simulate / "Preview impact" dialog**. Graph node-click re-centring is also unasserted
+-- testing it means computing a node's screen position from sigma's camera, which tests
+the renderer rather than the product; the keyboard-accessible node list that performs
+the same action *is* asserted.

@@ -30,9 +30,12 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
 
-  // 4 minutes per test: cold ranking (~90s) + explain (~10s) + screenshots.
-  timeout: 240_000,
-  expect: { timeout: 120_000 },
+  // 7 minutes per test. A cold ranking is 40-90s on an idle engine and can be
+  // several minutes when the engine has just restarted or is under load, and
+  // some steps pay for more than one. Individual slow steps raise this further
+  // with test.setTimeout().
+  timeout: 420_000,
+  expect: { timeout: 180_000 },
 
   reporter: [['list'], ['html', { outputFolder: path.join(here, 'playwright-report'), open: 'never' }]],
 

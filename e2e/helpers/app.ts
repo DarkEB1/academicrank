@@ -7,7 +7,9 @@ import type { WarmProfile } from '../global-setup';
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const SHOTS_DIR = path.join(here, '..', 'screenshots');
 export const WARM_STATE = path.join(here, '..', '.auth', 'warm.json');
-export const EMPTY_STATE = { cookies: [], origins: [] } as const;
+/** A genuinely empty browser: no cookies, no localStorage, so the app must
+ *  mint a fresh anonymous profile. */
+export const EMPTY_STATE: { cookies: never[]; origins: never[] } = { cookies: [], origins: [] };
 
 export function warmProfile(): WarmProfile {
   const file = path.join(here, '..', '.auth', 'warm-profile.json');
@@ -34,7 +36,7 @@ export async function gotoRoute(page: Page, hash: string): Promise<void> {
  * The rankings table is rendered only once the (potentially very slow) first
  * ranking arrives. Waits on a real row rather than a spinner disappearing.
  */
-export async function waitForRankingRows(page: Page, timeout = 180_000): Promise<Locator> {
+export async function waitForRankingRows(page: Page, timeout = 360_000): Promise<Locator> {
   const explain = page.getByRole('button', { name: /^Explain the score for/ });
   await expect(explain.first()).toBeVisible({ timeout });
   return explain;

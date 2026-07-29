@@ -1,9 +1,9 @@
 """Rankings, recommendations, blindspots, diversity, simulation, subgraph."""
 from __future__ import annotations
 
-import collections
-import math
+import logging
 import secrets
+import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -14,7 +14,9 @@ from ..deps import DbSession, OwnedProfile
 from ..meritrank import (
     Uncertainty, assign_tie_groups, leave_one_out_uncertainty,
 )
-from ..models import Profile, Trust, node_to_work_id, profile_node, work_node
+from ..models import Trust, node_to_work_id, profile_node, work_node
+
+log = logging.getLogger("provenance.rankings")
 
 router = APIRouter(prefix="/api", tags=["rankings"])
 
@@ -401,15 +403,31 @@ class _ScratchEgo:
         self._written.append(node)
 
     def clear(self) -> None:
-        for node in self._written:
-            try:
-                services.mr_of(self.db).delete_edge(self.name, node, config.AGGREGATE)
-            except Exception:  # noqa: BLE001
-                # A failed mr_* call aborts the Postgres transaction, so every
-                # subsequent statement on this session would fail too unless we
-                # rewind. Teardown must keep going: the remaining edges still need
-                # deleting.
-                self.db.rollback()
+        """Delete every edge written, retrying the ones that fail.
+
+        A single `Service returned Fail` is transient (services.engine_retry), but on
+        teardown it used to be swallowed and the edge leaked -- observed once in an
+        end-to-end run. Retry, because "non-destructive" has to be exactly true.
+        """
+        remaining = list(self._written)
+        for attempt in range(4):
+            failed: list[str] = []
+            for node in remaining:
+                try:
+                    services.mr_of(self.db).delete_edge(
+                        self.name, node, config.AGGREGATE)
+                except Exception:  # noqa: BLE001
+                    # A failed mr_* call aborts the Postgres transaction, so every
+                    # later statement on this session fails too unless we rewind.
+                    self.db.rollback()
+                    failed.append(node)
+            if not failed:
+                break
+            remaining = failed
+            time.sleep(0.4 * (attempt + 1))
+        else:
+            log.error("scratch ego %s leaked %d edge(s): %s",
+                      self.name, len(remaining), remaining)
         self._written.clear()
 
     def __exit__(self, *exc) -> None:
@@ -498,6 +516,17 @@ def simulate(
 
     weights = services.stored_weights(profile)
     nonce = secrets.token_hex(4)
+    stubs = services.stub_ids(db)
+
+    # `before` is the profile's *current* ranking, which build_pool has already
+    # computed and cached. Re-deriving it on a scratch ego would double the engine
+    # cost of this endpoint (each scratch ranking is one full pass plus one
+    # leave-one-out replicate per seed) and could disagree with what /rankings shows
+    # for the same profile. Only the counterfactual needs the scratch ego.
+    pool = services.build_pool(db, profile, context="aggregate", exclude_trusted=True)
+    before_all: list[tuple[str, float, Uncertainty]] = [
+        (i.work_id, i.trust, i.uncertainty) for i in pool.items
+    ]
 
     def _rank(seeds: dict[str, float], tag: str) -> list[tuple[str, float, Uncertainty]]:
         if not seeds:
@@ -508,14 +537,15 @@ def simulate(
         out: list[tuple[str, float, Uncertainty]] = []
         for node, val in composed.items():
             wid = node_to_work_id(node)
-            if wid and wid not in seeds:
+            # Same exclusions rank_profile applies, or the two sides are not
+            # comparable: no seeds of the hypothetical set, and no stubs.
+            if wid and wid not in seeds and wid not in stubs:
                 out.append((wid, val, unc.get(
                     node, Uncertainty(0, 0, 0, 0, "leave_one_out", 1))))
         out.sort(key=lambda r: -r[1])
         assign_tie_groups(out)
         return out
 
-    before_all = _rank(current, "before")
     after_all = _rank(hypothetical, "after")
 
     before_rank = {wid: i + 1 for i, (wid, _v, _u) in enumerate(before_all)}
@@ -526,7 +556,6 @@ def simulate(
     before = before_all[:body.limit]
     after = after_all[:body.limit]
 
-    pool = services.build_pool(db, profile, context="aggregate", exclude_trusted=True)
     briefs = services.paper_briefs(
         db, [w for w, _v, _u in before] + [w for w, _v, _u in after])
 

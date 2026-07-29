@@ -69,8 +69,15 @@ export function AppShell(): JSX.Element {
 
   return (
     <div className="min-h-screen bg-canvas">
+      {/* Under HashRouter the location *is* the hash, so a plain href="#main"
+          is parsed as the route "main" and bounces the user to "/" via the
+          catch-all. Move focus directly instead and leave the route alone. */}
       <a
         href="#main"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById('main')?.focus();
+        }}
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-sm focus:bg-surface focus:px-3 focus:py-2 focus:text-sm focus:text-ink"
       >
         Skip to content
@@ -131,7 +138,9 @@ export function AppShell(): JSX.Element {
 
       <ProximityStatement />
 
-      <main id="main" className="mx-auto max-w-[110rem] px-6 py-8">
+      {/* tabIndex -1 so the skip link can put focus here without adding it to
+          the tab order. */}
+      <main id="main" tabIndex={-1} className="mx-auto max-w-[110rem] px-6 py-8 focus:outline-none">
         <ErrorBoundary section="This screen" key={location.pathname}>
           <Outlet />
         </ErrorBoundary>

@@ -5,7 +5,7 @@ import datetime as dt
 import secrets
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Response, status
 
 from .. import config, ranking, schemas, services
 from ..deps import COOKIE_NAME, CurrentProfile, DbSession, OwnedProfile
@@ -82,13 +82,13 @@ def set_trust(
     body: schemas.TrustUpdate,
     profile: OwnedProfile,
     db: DbSession,
-    background: BackgroundTasks,
 ) -> schemas.TrustMutateResponse:
     """`strength: 0` removes the entry; 1..5 upserts it.
 
     The engine edge is written by `ranking.ensure_seeded` before every read, so the
-    only thing that must happen synchronously is the row. The walk warm is scheduled
-    in the background because building walks for a fresh ego is not instant.
+    only thing that must happen synchronously is the row. The walk warm is handed to a
+    detached thread (services.schedule_warm) because building walks for a fresh ego
+    takes minutes, which is far too long to hold the response cycle open.
     """
     work = db.get(Work, body.work_id)
     if work is None:
@@ -122,9 +122,9 @@ def set_trust(
         existing.strength = body.strength
         existing.is_distrust = body.is_distrust
     db.commit()
-    services.invalidate_pool(profile.id)
+    services.invalidate_scores(profile.id)
 
-    background.add_task(services.warm_profile, profile.id)
+    services.schedule_warm(profile.id)
 
     items = services.trust_entries(db, profile)
     return schemas.TrustMutateResponse(trust_count=len(items), items=items)

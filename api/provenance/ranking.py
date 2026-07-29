@@ -112,10 +112,17 @@ def compose(
     for c in active:
         nodes |= set(per_context.get(c, {}))
 
+    # The baseline carries its own weight. Without this the `citation` slider is inert
+    # -- it is not in ENTITY_CONTEXTS, so nothing ever reads it -- which violates the
+    # rule that we never show a control that does nothing. Scaling the baseline against
+    # the marginals genuinely reorders: it trades "how much do direct citations matter"
+    # against "how much do the entity relations matter".
+    w_base = float((weights or {}).get(config.BASELINE_CONTEXT, 1.0))
+
     out: dict[str, float] = {}
     for n in nodes:
         b = base.get(n, 0.0)
-        v = b
+        v = w_base * b
         for c in active:
             sc = per_context.get(c, {}).get(n)
             if sc is None:
@@ -136,6 +143,8 @@ def compose(
 # playground genuinely live.
 _CACHE: dict[str, tuple[str, dict[str, dict[str, float]], dict[str, dict[str, float]]]] = {}
 _CACHE_MAX = 64
+# Window for leave-one-out replicates (uncertainty), much smaller than the ranking pool.
+LOO_FETCH = 2500
 
 
 def trust_signature(db: Session, profile: Profile) -> str:
@@ -159,7 +168,12 @@ def _scores_cached(
     mr = _mr(db)
     seeds = ensure_seeded(db, profile)
     per_ctx = _context_scores(mr, profile_node(profile.id), fetch)
-    loo = _leave_one_out(db, profile, None, fetch) if 2 <= seeds <= 12 else {}
+    # Leave-one-out costs one mr_scores call per context PER SEED, so it dominates cold
+    # start. It only feeds uncertainty on the rows a user actually sees, so it runs on a
+    # much smaller window than the ranking pool. At fetch=12000 the full-width version
+    # pushed a 5-seed cold start past 300s; capped, it is back to ~1 minute.
+    loo_fetch = min(fetch, LOO_FETCH)
+    loo = _leave_one_out(db, profile, None, loo_fetch) if 2 <= seeds <= 12 else {}
     if len(_CACHE) >= _CACHE_MAX:
         _CACHE.pop(next(iter(_CACHE)))
     _CACHE[profile.id] = (sig, per_ctx, loo)
@@ -244,15 +258,27 @@ def _leave_one_out(
     out: dict[str, dict[str, dict[str, float]]] = {}
     scratch = f"Uloo_{profile.id}"
     for skip in rows:
-        for t in rows:
-            if t.work_id == skip.work_id:
-                continue
-            mr.put_edge(scratch, work_node(t.work_id),
-                        config.TRUST_STRENGTH_SCALE.get(t.strength, 0.7), config.AGGREGATE)
-        out[skip.work_id] = _context_scores(mr, scratch, fetch)
-        for t in rows:
-            if t.work_id != skip.work_id:
-                mr.delete_edge(scratch, work_node(t.work_id), config.AGGREGATE)
+        # try/finally, because a client timeout or engine error mid-replicate used to
+        # abandon the scratch edges in the engine. They are harmless (nothing uses
+        # Uloo_* as an ego) but they accumulate, and a stale scratch ego perturbs
+        # nothing only by luck. Always tear down what this iteration added.
+        added: list[str] = []
+        try:
+            for t in rows:
+                if t.work_id == skip.work_id:
+                    continue
+                node = work_node(t.work_id)
+                mr.put_edge(scratch, node,
+                            config.TRUST_STRENGTH_SCALE.get(t.strength, 0.7),
+                            config.AGGREGATE)
+                added.append(node)
+            out[skip.work_id] = _context_scores(mr, scratch, fetch)
+        finally:
+            for node in added:
+                try:
+                    mr.delete_edge(scratch, node, config.AGGREGATE)
+                except Exception:  # noqa: BLE001 - teardown must not mask the real error
+                    pass
     return out
 
 

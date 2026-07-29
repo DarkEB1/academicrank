@@ -150,10 +150,12 @@ async def import_bibtex(
                      strength=IMPORT_STRENGTH, is_distrust=False))
         added += 1
     db.commit()
-    services.invalidate_pool(profile.id)
+    services.invalidate_scores(profile.id)
 
     if added:
-        services.warm_profile(profile.id)
+        # Background, like POST /trust: an import can add dozens of seeds at once and a
+        # full warm is minutes of engine time.
+        services.schedule_warm(profile.id)
 
     briefs = services.paper_briefs(db, matched_ids)
     return schemas.BibtexImportResponse(

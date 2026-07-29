@@ -298,3 +298,46 @@ the night and the loader in particular caught a 56k-citation bug in my own scrap
 would not have found. But I verified their work by driving it, not by reading all of it,
 and the frontend was built against a contract rather than a running backend. The E2E
 suite is the only thing standing between that and an integration surprise.
+
+---
+
+## FINAL GATE
+
+`docker compose down -v` (volume destroyed), then `docker compose up` from scratch,
+then the full Playwright suite against it.
+
+```
+=== DOWN -v ===  Volume academicrank_pgdata Removed
+=== UP ===       db healthy -> api started -> web started
+api answering at once with: {"ok":true,"graph_loaded":false,"nodes":0,"edges":0}
+bootstrap READY after 87s: {"graph_loaded":true,"nodes":111552,"edges":549121}
+```
+
+The corpus was rebuilt from the committed `data/raw/*.jsonl.gz` with no network access,
+the graph re-derived, and the edge list pushed back into mr-service — all on a
+background thread, so /health stayed responsive and honest (`graph_loaded:false`) while
+it ran.
+
+```
+Running 25 tests using 1 worker
+  ... 25 passed (2.1m)
+```
+
+Full journey green: profile created -> 5 trusted papers added -> rankings with error
+bars and tie groups -> explain showing a path back to a trusted paper -> context weight
+slider reorders the top-20 (20/20 positions changed). Plus: no console errors on any of
+the six routes, WebGL graph genuinely painting (33,325 px of nodes), dark mode,
+command palette, cold-start honesty notice, disclaimer verbatim, keyboard tab order,
+and no horizontal overflow at 1280px.
+
+### Late fixes verified in this run
+
+| Finding | Fix | Verified |
+|---|---|---|
+| 15 of a top-25 were metadata-less STUB records | excluded from results, kept in the graph | 0/20 stubs, 5,007 rankable papers |
+| `citation` weight slider did nothing (0/20) | baseline now carries its own weight in `compose()` | 20/20 positions change |
+| explain read "was written by -> who also wrote" | interleave node labels; pronoun on the last hop | "...written by Singiresu S. Rao, who also wrote it" |
+| leave-one-out abandoned scratch edges on timeout | try/finally teardown | no new `Uloo_*` residue |
+| skip link broke navigation under HashRouter | preventDefault + focus `#main` (found by the E2E agent) | regression test 08-keyboard |
+
+Cold 74.5s / warm 50ms, deterministic across repeat calls.

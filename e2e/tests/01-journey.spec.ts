@@ -196,6 +196,11 @@ test('step 4 — the explain panel shows a path from a paper we trusted', async 
 });
 
 test('step 5 — moving a context weight slider changes the top-20 ranking', async () => {
+  // This step pays for TWO full re-rankings on the engine: one when the screen
+  // writes the current parameters back on mount, and one for the weight we
+  // move. On a cold engine each is 50-90s, so the default budget is not enough.
+  test.setTimeout(600_000);
+
   await gotoRoute(page, '/params');
 
   await expect(page.getByRole('heading', { name: 'Parameter playground' })).toBeVisible();
@@ -224,22 +229,59 @@ test('step 5 — moving a context weight slider changes the top-20 ranking', asy
   await expect(slider).toHaveValue('0');
   await expect(page.locator('#w-author').locator('xpath=../div/span')).toHaveText('0.00');
 
+  // Confirm the app actually wrote the change to the server before we start
+  // waiting on the engine. Without this, a timeout below is ambiguous between
+  // "the UI never sent it" and "the engine was slow", and those are very
+  // different bugs.
+  await expect(
+    page.getByText(/Saving parameters…|Parameters saved\./),
+    'the app must POST the new weight to /params',
+  ).toBeVisible({ timeout: 30_000 });
+
   // Debounce (350ms) -> POST /params -> invalidate -> refetch. Poll the DOM.
+  // Generous: a re-rank under new weights is a fresh engine computation.
+  //
+  // Two traps this poll has to avoid:
+  //  1. A transient EMPTY list while the <ol> re-renders trivially satisfies
+  //     "different from before". Treat a short list as "not yet" so the poll
+  //     keeps waiting instead of declaring a bogus pass.
+  //  2. If the API falls over mid-re-rank (it is a live stack), the screen
+  //     shows an error state and the list never changes. Surface that as
+  //     itself rather than as a 7-minute timeout with no explanation.
+  const API_ERROR = '__API_ERROR__';
+  const beforeKey = before.join('|');
+
   await expect
-    .poll(async () => (await paramsTopTwenty(page)).join('|'), {
-      message: 'the top-20 ranking did not change after adjusting the author context weight',
-      timeout: 120_000,
-      intervals: [500, 1000, 2000],
-    })
-    .not.toBe(before.join('|'));
+    .poll(
+      async () => {
+        if (
+          (await page.getByRole('alert').filter({ hasText: 'The API is not answering' }).count()) > 0
+        ) {
+          return API_ERROR;
+        }
+        const current = await paramsTopTwenty(page);
+        if (current.length < 10) return beforeKey; // mid-render; keep waiting
+        return current.join('|');
+      },
+      {
+        message: 'the top-20 ranking did not change after adjusting the author context weight',
+        timeout: 420_000,
+        intervals: [1000, 2000, 5000],
+      },
+    )
+    .not.toBe(beforeKey);
 
   await expect(page.getByText('re-ranking…')).toHaveCount(0);
   const after = await paramsTopTwenty(page);
 
   // THE assertion this suite exists for: personalisation is live, not decorative.
-  expect(after, 'top-20 must be a real list').not.toHaveLength(0);
+  expect(
+    after,
+    'the API errored while re-ranking, so the ranking could not be compared. ' +
+      'This is a stack failure, not a UI failure — check that nothing restarted the api container mid-run.',
+  ).not.toHaveLength(0);
   expect(after.join('|'), 'the ordered top-20 must differ after moving a weight').not.toBe(
-    before.join('|'),
+    beforeKey,
   );
 
   const moved = after.filter((id, i) => before[i] !== id).length;

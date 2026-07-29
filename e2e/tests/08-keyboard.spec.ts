@@ -56,18 +56,40 @@ test('Tab reaches the primary controls on the rankings screen', async ({ page })
 
   // The focused Explain button must be operable from the keyboard.
   await page.keyboard.press('Enter');
-  await expect(page.getByRole('dialog', { name: 'Explanation' })).toBeVisible();
+  const panel = page.getByRole('dialog', { name: 'Explanation' });
+  await expect(panel).toBeVisible();
+  // Wait for the explanation itself, not just the empty drawer, so the
+  // screenshot shows something worth looking at.
+  await expect(panel.getByRole('heading', { name: 'How the trust arrives' })).toBeVisible();
   await shot(page, '22-keyboard-explain-via-keyboard.png');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('dialog', { name: 'Explanation' })).toHaveCount(0);
 });
 
-test('the skip link jumps to main content', async ({ page }) => {
-  await gotoRoute(page, '/');
+/**
+ * Regression test for the skip link. It used to be a bare `href="#main"`,
+ * which under HashRouter is read as the route "main" and falls through the
+ * catch-all to "/" — so on any sub-route the skip link threw you back to the
+ * rankings screen and left focus on <body>. See E2E_NOTES.md.
+ */
+test('the skip link moves focus to main without changing route', async ({ page }) => {
+  await gotoRoute(page, '/trust');
+  await expect(page.getByRole('heading', { name: 'Your trust set (5)' })).toBeVisible();
+
   await page.keyboard.press('Tab');
   const skip = page.getByRole('link', { name: 'Skip to content' });
   await expect(skip).toBeFocused();
+  // sr-only until focused, then visible: that is the whole point of a skip link.
   await expect(skip).toBeVisible();
+
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/#main$|#\/.*$/);
+
+  await expect(page, 'the skip link must not navigate away from the current screen').toHaveURL(
+    /#\/trust$/,
+  );
+  await expect(page.getByRole('heading', { name: 'Your trust set (5)' })).toBeVisible();
+  expect(
+    await page.evaluate(() => document.activeElement?.id),
+    'focus must land on the main landmark',
+  ).toBe('main');
 });
