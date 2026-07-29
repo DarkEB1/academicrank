@@ -1,313 +1,313 @@
 # Design: trust a paper's bibliography by uploading its PDF
 
-**Date:** 2026-07-29
-**Status:** approved, not implemented
+**Date:** 2026-07-29 (revised same day after two adversarial reviews)
+**Status:** approved direction; revised against review findings; awaiting final user sign-off
 
 ## Problem
 
-Building a trust set one paper at a time is slow, and the papers a researcher trusts most
-are already enumerated somewhere: in the bibliographies of their own work. The feature
-lets a user upload a PDF of a paper they wrote and seed their trust set from everything it
-cites, at strength 5/5.
+Building a trust set one paper at a time is slow, and the papers a researcher trusts
+most are already enumerated in the bibliographies of their own work. The feature lets a
+user upload a PDF of a paper they wrote, review the parsed bibliography, and seed their
+trust set from it — with the uploaded paper (and references OpenAlex knows) entering the
+graph as real nodes.
 
-### This is not duplicating linkage we already have
+**Justification, stated honestly.** Two things and only two things:
+1. Bulk trust-set seeding from a document the user already has.
+2. The only path by which papers *not in OpenAlex* (preprints, unpublished work) can
+   exist in this system at all.
 
-Bibliographies of corpus papers are *already* fully materialised — 181,388 citation edges,
-the highest-weighted relation in the graph. The upload path exists because that source has
-two structural holes it cannot fill:
+An earlier draft justified this feature as "corpus repair" against the 2,079
+empty-reference works and 89,540 leaf stubs. Review (B3) showed that framing to be a
+rationalisation — repairing those at scale would require thousands of distinct authors
+to upload — and tying it to the failed Phase 1 Gate 2 repeated the exact move DECISIONS
+D6 rejected. That framing is withdrawn. If the Gate 2 number moves because users
+supplied references, that measures user activity, not corpus quality, and must not be
+reported as progress against D6.
 
-| Hole | Size | What upload does |
+## Decision history
+
+| Fork | Decision | Notes |
 |---|---|---|
-| Full works where OpenAlex returns an **empty** `referenced_works` | **2,079 of 7,211 (29%)** | gives them a bibliography for the first time |
-| Stubs, which have no outgoing references by construction | 89,540 | promotes a leaf to an interior node |
-| Papers not in OpenAlex at all (preprints, unpublished) | unbounded | adds them as `UL…` nodes |
+| Input format | Actual PDF upload | over identify-by-DOI, ORCID sweep, BibTeX |
+| Unmatched references | Fetch from OpenAlex, add to graph | user decision |
+| Uploaded paper itself | Always becomes a node | user instruction |
+| Extraction engine | Pure Python `pdfminer.six` | GROBID chosen then reversed; official image is 12.5 GB |
+| Self-citations | **Included**, labelled in review | user decision; justification deliberately does NOT lean on sybil tolerance, which this build measured absent (ratio 1.00 ± 0.23) |
+| Seed strength | **3/5 (0.7) default**, per-entry promotion to 5/5 | revised after review; see "Trust semantics" |
+| Shared-graph writes | **Yes, labelled, with per-user include/exclude** | user decision after review; see "Visibility" |
 
-The first of these is the direct cause of the failed Phase 1 Gate 2 (71% against a 90%
-target, ceiling 71.2%), and it is concentrated in books and pre-2000 work — which is also
-where `KNOWN_ISSUES.md` §5 says the corpus is weakest. So this feature is, incidentally,
-the only user-driven mechanism in the product for repairing the corpus.
+## What the adversarial reviews changed
 
-## Decisions taken during brainstorming
+Two independent reviews (semantic correctness; implementation method) each returned
+"rework the graph-mutation half". Every blocking finding and its design response:
 
-| Fork | Chosen | Rejected |
-|---|---|---|
-| Input format | **Actual PDF upload** | Identify-by-DOI (no parsing); ORCID sweep; BibTeX of own papers |
-| References not in the corpus | **Fetch from OpenAlex and add to the graph** | Report only; fetch metadata for display but don't trust |
-| Trust semantics | **5/5, tagged with its upload and reversible as a batch** | Plain untagged 5/5; default 4/5 with 5/5 opt-in |
-| Extraction engine | **Pure Python (`pdfminer.six`)** | GROBID container — chosen, then reversed by the user |
-| Uploaded paper itself | **Always added to the graph**, whether uploaded for checking or for trusting | (user instruction, not a fork) |
-
-### Why not GROBID
-
-It was selected and then reversed. Worth recording what the reversal costs and what it
-avoided: the official `grobid/grobid:0.8.1` is **12.51 GB compressed** (the deep-learning
-build) — untenable on this 16 GB machine. `lfoppiano/grobid:0.8.1` is 0.50 GB and would
-have been the viable option. The pure-Python path avoids a new service entirely at the
-cost of recall on messy bibliographies, absorbed by routing uncertainty to human review.
-
-### Why `pdfminer.six`
-
-MIT-licensed, pure Python, and exposes character positions and font sizes — required for
-column detection, hanging-indent splitting and title guessing. `pypdf` gives text without
-geometry, which is not enough. **PyMuPDF is deliberately avoided: it is AGPL and this
-repository is MIT.**
+| Finding | Response in this spec |
+|---|---|
+| B1: 5/5 blanket seeds collapse uncertainty/tie-groups; 43×1.4 vs 5×0.7 = upload is 94% of the ego | 3/5 default; upload counts as **one** leave-one-out unit |
+| B2: unauthenticated write primitive into the strongest edge type of a shared graph | labelled works + per-user visibility filter; honest limit stated (see Visibility) |
+| B3: coverage-hole justification is D6 in costume | justification withdrawn (above) |
+| B4/N6: `build_graph.py` TRUNCATEs `graph_edges`; uploads destroyed on rebuild | **`citations` (+ entity tables) are the durable representation; `graph_edges` and the engine are derived.** Rebuild now *regenerates* uploads and adds their coupling/co-citation edges |
+| B7/B3(method): "Postgres rolls back the engine" is false — RPCs are not transactional | **Postgres-first invariant**: commit rows, then push engine edges idempotently; `status='engine_pending'` + background reconcile; restart repairs via `bootstrap.push_graph_to_engine()` |
+| B1(method): 165–890 serialised `mr_put_edge` calls at measured 87 ms = 14–77 s blocking everyone | **`mr_put_edges` batched non-clearing RPC** added to the vendored engine (see below) |
+| B2(method): `mr_delete_node` removes out-edges only — undo as specified impossible | undo = `DELETE FROM graph_edges/citations WHERE …` + one batched `mr_delete_edge` pass; orphaned node *names* linger harmlessly until restart (documented litter) |
+| B5(sem)/N6: uploaded works were second-class (no epoch factor, no reverse edges, no damping) but rendered first-class | confirm path writes **edge parity**: `cites`+`cited_by` with `epoch_factor`, entity edges where OpenAlex metadata exists; `UL…` locals get no entity edges (no reliable metadata) and are labelled |
+| B5(method): single `trust.upload_id` column cannot express undo semantics | `trust_sources(profile_id, work_id, upload_id)` join table, `ondelete=CASCADE`; trust row deleted only when no source rows survive |
+| B6: `max()+1` local-id allocation collides and reuses ids the engine still remembers | Postgres sequence `work_local_id_seq`, ids never reused; upload dedupe by content hash |
+| B4(method): **Alembic is copied into the image but never executed** — new columns will never exist on live DBs | `alembic upgrade head` wired into api startup before `create_all`; `works.source` gets `server_default='openalex'`. This is a live bug in the existing app, fixed in stage 0 regardless of this feature |
+| N1: cache invalidation — `max(graph_edges.id)` generation marker has ABA, process-locality, and LRU-skew holes | persisted `graph_meta.version` counter, bumped on every graph mutation, **mixed into both `ranking._CACHE` and `services` pool keys**. Policy chosen deliberately: accept the global invalidation and document that an upload costs other users a cold start |
+| N1(sem): `ensure_seeded` loops put_edge on every cold read (3.9 s at 45 seeds) | seed only when trust signature or graph version changed, tracked per profile |
+| N3: scorer's 0.5 auto-accept floor is dead code; cv term wrong-signed | scorer redesigned (see Extraction): structural key-sequence check first, margin-based acceptance, discriminative features |
+| B6(sem): draft can't record OpenAlex resolutions without violating "nothing before confirm" | `upload_references.resolved_openalex_id` column; `works` rows created only at confirm |
+| B6(sem): trigram threshold tuned on curated BibTeX, applied to noisy PDF text, pre-ticked | pre-tick **DOI/arXiv matches only**; every trigram match requires an explicit tick |
 
 ## Architecture
 
-No new service. Everything runs in the existing `api` container.
-
 ```
-PDF ──► extract (pdfminer.six) ──► locate bibliography ──► split entries
-                                                              │
-                    ┌─────────────────────────────────────────┘
-                    ▼
-        per entry: DOI ─► arXiv id ─► title+year vs corpus ─► OpenAlex search ─► review
-                    │
-                    ▼
-        draft (nothing written to graph or trust yet)
-                    │
-              user reviews / corrects
-                    ▼
-        confirm ──► insert works ──► insert graph_edges ──► mr_put_edge ──► trust @ 5/5
+PDF ──► extract (pdfminer.six, LAParams) ──► split (4 strategies) ──► score/refuse
+                                                                        │
+                 per entry: DOI → arXiv → corpus trigram → OpenAlex → review
+                                                                        │
+                                              draft (Postgres only, no graph writes)
+                                                                        │
+                                                            user reviews / corrects
+                                                                        ▼
+   confirm:  COMMIT works + citations + entity rows + graph_edges + trust(+sources)
+                          then, outside the transaction:
+             push edges to engine via mr_put_edges (batched, idempotent)
+             on failure → status='engine_pending', background reconcile
 ```
 
-### Graph mutation is incremental, never a bulk reload
+**Source-of-truth invariant** (same one `bootstrap.py` already enforces): *Postgres
+relational tables are the truth; `graph_edges` is a derived materialisation; the engine
+is a cache of `graph_edges`.* Confirm writes down the stack in that order; every layer
+below Postgres is idempotently re-derivable.
 
-`mr_bulk_load_edges` **clears all engine state** and the engine holds one graph shared by
-every profile. Using it here would mean a ~25s global reload on every upload.
-`mr_put_edge` does not clear state, and the volumes involved are tens of edges, not the
-hundreds of thousands the "never loop put_edge" guidance was written for.
+### The engine patch: `mr_put_edges`
 
-New edges are also written to `graph_edges`, which is what `bootstrap.py` replays after a
-restart. Without that, uploads would silently vanish whenever `mr-service` restarts,
-because it holds the graph in memory.
+`mr_bulk_load_edges` clears all engine state (`clear_walks()` at
+`aug_graph/edges.rs:147`; `subgraphs_map.clear()` on the bulk path only). `mr_put_edge`
+does not clear, but costs a measured **87 ms per call** (RPC + 6-subgraph fan-out), and
+a 50-reference upload needs 165–890 edge writes = 14–77 s on an engine that serialises
+requests.
 
-### Node identity
+Fix: add `mr_put_edges(src[], dst[], weight[], magnitude[], context[], timeout)` to the
+vendored connector + a non-clearing batch op in the service — the same apply loop as
+bulk load, minus the `clear_walks()`. We already build and patch this source
+(DECISIONS D2/D2.1); this deepens divergence from upstream and we accept that cost
+knowingly. **Fallback** if the patch proves troublesome: async confirm returning `202`
++ job id (the `schedule_warm` detached-thread pattern), references capped at 200.
+Either way the cap and a specific-reason rejection apply.
 
-The engine derives node kind from the first character of the node name and rejects any
-edge that is not `(User,User)`, `(NonUser,User)` or `(User,NonUser)` (DECISIONS.md D1).
-Papers are `U`+work-id.
+### Trust semantics
 
-Works with an OpenAlex id keep `UW…`. Works that exist only because a user uploaded them
-(preprints, unpublished, anything OpenAlex does not know) get a local id `L1, L2, …` and
-therefore node names `UL1, UL2, …`. `models.node_to_work_id` widens from `^UW\d+$` to
-`^U[WL]\d+$`.
+Default **3/5** (`TRUST_STRENGTH_SCALE[3] = 0.7`) — the encoding of "I cited this".
+Review arithmetic: a median bibliography at 5/5 (1.4) would be 60.2 units of outgoing
+weight against ~3.5 for five hand-picked seeds — 94% of the ego — and would push ~77%
+of profiles past the leave-one-out window (2–12 seeds), collapsing every ranking into
+one tie group. Instead:
 
-This keeps user-contributed works type-safe against the engine's prefix rules while
-remaining visibly distinct from OpenAlex records in every log line and API response.
+- per-entry promotion to 5/5 in the review table and afterwards;
+- **leave-one-out treats the whole upload as one jackknife unit** (leave-one-upload-out),
+  so error bars and tie groups stay meaningful and LOO cost stays bounded;
+- the cold-start notice counts an upload as one considered decision, not N.
 
-## Extraction, designed for format variety
+### Visibility of user-contributed works
 
-The requirement is to catch as many bibliography styles as possible. The approach is to
-run several candidate strategies and score them, rather than tune one parser.
+Only `UL…` local works (content that exists solely because a user uploaded it) carry
+`works.source = 'user_upload'`. Works fetched from OpenAlex during confirm are ordinary
+corpus records and are not labelled. Every profile has `include_user_uploads`
+(default **false**; uploader always sees their own). The filter applies in rankings,
+search, recommendations, blindspots and the graph explorer.
 
-### Heading detection
-
-Case-insensitive, matched against a run of layout lines:
-`References`, `Bibliography`, `Literature Cited`, `Works Cited`, `Reference List`,
-`Références`, `Literaturverzeichnis`, `Referencias`, plus all-caps and letter-spaced
-variants. If no heading matches, fall back to scanning the final 40% of the document for
-a dense run of citation-shaped lines.
-
-### Column detection
-
-Two-column layout is the norm in mathematics and CS journals, and interleaving the columns
-is the single most common way a naive parser produces gibberish on exactly those papers.
-`pdfminer` gives x-positions; text boxes are clustered by x to detect column boundaries and
-read in the correct order.
-
-### Entry splitting — four strategies, scored
-
-| Strategy | Catches |
-|---|---|
-| Bracketed numeric `[1]`, `[12]` | most CS/maths journals |
-| Alpha keys `[Har77]`, `[GH78]` | AMS / mathematics style |
-| Ordinal `1.`, `(1)` | Elsevier, older styles |
-| Hanging indent (geometry) | APA / Chicago, unnumbered |
-
-Each candidate split is scored, with explicit thresholds so this is testable rather than
-a matter of taste:
-
-| Signal | Rule |
-|---|---|
-| Entry count | reject `< 3` or `> 500` |
-| Entry length | reject if median < 30 chars; score on low coefficient of variation |
-| Citation shape | score = fraction of entries containing a 4-digit year in 1800–2030 **or** a DOI; require `>= 0.6` |
-
-`score = 0.5 * citation_shape + 0.3 * (1 - min(cv, 1)) + 0.2 * count_plausibility`.
-
-Highest score wins. **If the best score is below `0.5`, no entry is auto-accepted and the
-whole bibliography goes to review.** Guessing badly here would silently poison a trust
-set, which is worse than asking.
-
-### Per-entry normalisation
-
-Before matching: de-hyphenate line-wrapped words, normalise ligatures (`ﬁ`→`fi`), collapse
-whitespace, strip trailing page ranges.
-
-### Matching precedence
-
-1. DOI regex (`10.\d{4,9}/\S+`) → corpus lookup by normalised DOI.
-2. DOI → OpenAlex fetch if not in corpus.
-3. arXiv id → OpenAlex.
-4. Title + year → corpus trigram (`ix_works_title_trgm` already exists) at
-   **`TITLE_THRESHOLD = 0.55`**, reusing the constant already tuned in
-   `routers/imports.py` rather than inventing a second one. Where a year was parsed it
-   must match within ±1, which cheaply kills same-title-different-paper collisions.
-5. Title → OpenAlex search.
-6. Otherwise → review queue with the raw string.
-
-Confidence per entry drives the review UI:
-
-| Confidence | Source | UI |
-|---|---|---|
-| `1.0` | DOI or arXiv id | pre-ticked |
-| `0.7–0.9` | trigram ≥ 0.55 with year agreement | pre-ticked |
-| `0.4–0.7` | trigram without year, or OpenAlex search hit | shown unticked with candidates |
-| `< 0.4` | nothing usable | raw string + manual search box |
-
-Only entries at `>= 0.7` are pre-ticked. Everything else requires a human decision before
-it can become a 5/5 seed.
+**Honest limit, stated in the UI and KNOWN_ISSUES:** exclusion is *display-level*.
+There is one shared graph; walks propagate through uploaded edges for everyone, so an
+excluding user's scores are still perturbed by uploads existing. This cannot be fixed
+on this engine (one graph, U→U replication into every context). It is bounded —
+hundreds of edges among ~550k, under scores that are Monte Carlo estimates — but the
+system must never claim exclusion isolates you.
 
 ## Data model
 
 ```
 uploads
-  id                text PK
-  profile_id        FK profiles
-  filename          text
-  work_id           FK works NULL  -- the uploaded paper itself, as a node.
-                                   -- NULL while a draft: the paper is only created on
-                                   -- confirm, after the user has approved the title.
-  status            text           -- draft | confirmed
-  n_parsed          int
-  n_matched         int
-  n_added           int
-  n_unresolved      int
-  created_at        timestamptz
+  id                 text PK            -- opaque (uuid)
+  profile_id         FK profiles        (indexed)
+  filename           text
+  content_hash       text               UNIQUE(profile_id, content_hash) -- dedupe re-uploads
+  work_id            FK works NULL      ondelete=SET NULL  -- created at confirm
+  status             text               -- draft | applying | engine_pending | confirmed
+  n_parsed / n_matched / n_added / n_unresolved  int
+  created_at         timestamptz
 
-upload_references                  -- the draft, one row per parsed entry
-  upload_id         FK uploads
-  idx               int
-  raw              text
-  parsed_title      text
-  parsed_doi        text
-  parsed_year       int
-  work_id           FK works NULL  -- resolved target, once known
-  match_method      text           -- doi | arxiv | trigram | openalex | manual | none
-  confidence        float
-  decision          text           -- pending | accept | reject
+upload_references
+  upload_id          FK uploads         ondelete=CASCADE
+  idx                int
+  PRIMARY KEY (upload_id, idx)
+  raw                text
+  parsed_title/doi/year
+  resolved_openalex_id text NULL        -- records OpenAlex resolution WITHOUT creating works rows
+  work_id            FK works NULL
+  match_method       text               -- doi | arxiv | trigram | openalex | manual | none
+  confidence         float
+  decision           text               -- pending | accept | reject
 
-works.source        text           -- 'openalex' | 'user_upload'
-trust.upload_id     FK uploads NULL -- provenance; enables grouping and undo-all
+trust_sources
+  profile_id, work_id  FK trust (composite) ondelete=CASCADE
+  upload_id            FK uploads          ondelete=CASCADE  (indexed)
+  PRIMARY KEY (profile_id, work_id, upload_id)
+
+works.source        text  server_default 'openalex'   -- 'openalex' | 'user_upload'
+graph_meta          (version bigint)   -- persisted graph generation counter
+
+sequence work_local_id_seq   -- 'L' || nextval(); never reused (the engine has no
+                             -- transactional memory, so a reused id would inherit
+                             -- phantom edges from an abandoned confirm)
 ```
 
-`trust.upload_id` is what makes "38 of your 43 seeds came from my-paper.pdf", one-click
-undo, and per-entry demotion possible.
+Undo (`DELETE /api/uploads/{id}`): delete this upload's `trust_sources` rows; delete
+each `trust` row only if no other source row survives and it wasn't hand-added; delete
+the upload's `citations`/`graph_edges` rows; issue one batched `mr_delete_edge` pass
+(verified: propagates to all contexts in one call per edge); bump `graph_meta.version`.
+Node names linger in the engine registry until restart — harmless, documented litter.
+
+## Extraction
+
+`pdfminer.six` (MIT; PyMuPDF rejected as AGPL). Use `LAParams` for layout and column
+separation — **no hand-rolled x-clustering over characters** (review N4: LAParams
+already does this; bespoke k-means invents columns in justified single-column text).
+Column sanity check operates on `LTTextBox` midpoints per page: two-column hypothesis
+accepted only if the gutter exceeds ~4% of page width and each side holds ≥25% of boxes.
+
+Guards: 25 MB **and** 80-page cap; only the final 40% of pages get full layout analysis
+(`extract_pages(page_numbers=…)`); extraction runs in a worker with a wall-clock timeout.
+New deps in `requirements.txt`: `pdfminer.six`, `httpx` (the container currently has no
+HTTP client at all).
+
+**Heading detection** as before (multilingual set + all-caps/letterspaced variants),
+with the dense-run fallback over the tail of the document.
+
+**Entry splitting — four strategies, adjudicated structurally first:**
+
+1. **Structural check** (decisive when it fires): for keyed strategies — bracketed
+   numeric `[1]`, alpha keys `[Har77]`, ordinal `1.` — do the extracted keys form a
+   monotonically increasing, gap-free sequence from 1 (or a consistent alpha-key set
+   each matching `[A-Z][a-zA-Z+]*\d{2}`)? If yes: accept that split at confidence 1.0,
+   no scoring. This resolves most CS/maths/Elsevier layouts deterministically.
+2. Only on fallthrough, score candidates on **discriminative features**: median entry
+   length in **[60, 600]** chars; fraction of entries opening with an author-shaped
+   token; fraction containing a plausible year (1800–2030); fraction containing a
+   volume/page pattern (`\d+\s*[:(]\s*\d+`, `pp.`, `In:`); and entry count vs the count
+   of distinct in-text citation markers found in the body.
+3. **Accept on margin, not absolute score:** best candidate must beat the runner-up by
+   a named margin constant, else the whole bibliography goes to review. (The previous
+   formula's 0.5 floor was provably dead code, and its uniformity term rewarded the
+   over-splitting failure mode.)
+4. Every threshold is a named module constant with a named test, calibrated against the
+   fixture set — presented as calibration, not as derivation.
+
+Per-entry normalisation unchanged: de-hyphenation, ligature normalisation (`ﬁ`→`fi`),
+whitespace collapse, trailing page-range strip.
+
+## Matching
+
+Precedence: DOI regex → corpus | DOI → OpenAlex | arXiv id → OpenAlex | title+year →
+corpus trigram (`TITLE_THRESHOLD = 0.55` reused, year ±1 required) | title → OpenAlex
+search | review queue.
+
+Pre-ticking: **only DOI and arXiv matches (confidence 1.0)**. Every trigram or
+OpenAlex-search match requires an explicit tick — the 0.55 threshold was tuned on
+curated BibTeX, and PDF-extracted text is materially noisier. Self-citations are
+labelled, included, untickable like anything else.
 
 ## API
 
 ```
-POST   /api/uploads                       multipart PDF -> draft
-GET    /api/uploads/{id}                  draft state + per-reference match status
-PATCH  /api/uploads/{id}/references/{idx} correct one entry (choose a paper, or drop it)
-POST   /api/uploads/{id}/confirm          apply: add nodes, edges, trust at 5/5
-DELETE /api/uploads/{id}                  undo the batch
-GET    /api/profiles/{id}/uploads         list with counts, for the trust screen
+POST   /api/uploads                        multipart PDF → draft (202 if async path)
+GET    /api/uploads/{id}                   draft + per-reference status
+PATCH  /api/uploads/{id}/references/{idx}  correct/choose/reject one entry
+POST   /api/uploads/{id}/confirm           apply (Postgres-first; engine reconciled)
+DELETE /api/uploads/{id}                   undo batch
+GET    /api/profiles/{id}/uploads          list with counts
+POST   /api/profiles/{id}/params           gains include_user_uploads
 ```
-
-Two-phase by design: parsing produces a draft, and **nothing touches the graph or the
-trust set until `confirm`**.
-
-`DELETE` removes the trust rows created by that upload and removes added nodes *only where
-nothing else references them* — a work that has since been cited by another upload, or
-trusted directly, stays.
 
 ## UI
 
-New screen `/#/uploads`, plus a grouped section on the existing trust screen.
-
-- Drop zone → parse progress → review table.
-- Header row shows the detected title of the user's own paper, **editable**, because
-  without GROBID the title is a font-size heuristic and will sometimes be wrong.
-- Confident matches pre-ticked; ambiguous entries show candidates; unmatched entries show
-  the raw string with a manual search box.
-- `Import N seeds` applies.
-- Trust screen groups seeds by upload with undo-all.
-
-Existing UI conventions carry over: no bare numbers without uncertainty, disclaimer
-rendered verbatim, keyboard navigable, both themes.
+`/#/uploads`: drop zone → parse progress → review table (DOI/arXiv pre-ticked, trigram
+candidates untickable-by-default, unmatched with raw string + manual search; editable
+own-paper title; self-citations labelled). `Import N seeds at 3/5` with per-row
+strength override. Trust screen groups by upload with undo-all. Settings exposes the
+`include_user_uploads` toggle with the display-level-exclusion caveat verbatim. After
+import, land the user on `/recommendations` with the diversity dial raised — review N2:
+post-upload `/rankings` degenerates to "the references of my references", the least
+interesting output the system can produce.
 
 ## Error handling
 
-- Encrypted, scanned/image-only, or text-less PDFs rejected up front **with the specific
-  reason**, not a generic failure.
-- 25 MB size cap.
-- OpenAlex unreachable → corpus matching still runs; OpenAlex-dependent entries are marked
-  *"couldn't check"*, never *"not found"*. The distinction matters: one is our failure, the
-  other is a claim about the paper.
-- `confirm` is transactional in Postgres; a failure applying edges to the engine rolls the
-  whole thing back.
+Encrypted / image-only / text-less PDFs rejected with the specific reason; 25 MB & 80
+page caps; duplicate upload (content hash) rejected as "already uploaded". OpenAlex
+unreachable → corpus matching proceeds, affected entries marked *"couldn't check"*
+(our failure), never *"not found"* (a claim about the paper). Confirm: Postgres commit
+is atomic; engine push is idempotent and reconciled; `engine_pending` uploads are
+retried by a background sweep and repaired for free on restart.
 
 ## Testing
 
-**Fixtures are real open-access PDFs, not synthetic ones.** The corpus already flags
-`is_oa`, so fixtures are drawn from it to span the hard cases:
+- **Fixtures:** four real PDFs — modern two-column DOI-rich; **AMS alpha-key paper from
+  arXiv `math.AG`** (the corpus cannot supply one — it is statistics; and arXiv is
+  licence-safe to commit, unlike bronze-OA publisher PDFs); unnumbered APA; pre-2000
+  no-DOI. Licence rule: commit only CC-BY/arXiv; otherwise a URL+SHA256 manifest and
+  fetch script, tests skipped when absent.
+- **Hermetic scorer tests:** extraction output committed once as layout-line JSON
+  (`(text, bbox, font_size)` per line); splitters and scorer unit-tested against JSON,
+  immune to pdfminer drift. One slow test per fixture covers PDF → layout-lines.
+- **Adversarial synthetic cases** (a rejecter cannot be tested on well-formed input):
+  body text with in-text `[3]` markers (over-split trap); entry spanning a column
+  break; full-width footnote on a two-column page; bibliography of undated books —
+  each must be *refused*, not mis-accepted.
+- Stage-1 acceptance: ≥90% of entries correctly delimited on 3 of 4 fixtures **and**
+  every adversarial case refused.
+- Integration: upload → draft → confirm → rows in `citations`/`graph_edges` **and**
+  edges in the engine → `trust_sources` correct → undo unwinds → **negative test:**
+  forced failure between Postgres commit and engine push leaves no scoreable orphan
+  and reconciles.
+- Playwright: upload → review → confirm → seeds appear → ranking changes → toggle
+  `include_user_uploads` off in a second profile and assert the `UL…` work vanishes
+  from its search/rankings.
 
-1. modern two-column DOI-rich paper,
-2. AMS-style mathematics paper with `[Har77]` alpha keys,
-3. unnumbered APA/Chicago style,
-4. pre-2000 paper with no DOIs.
+## Phasing
 
-Each fixture gets an expected-parse assertion (entry count and a few known entries).
+0. **Platform fixes that are live bugs today, shipped regardless of this feature:**
+   wire `alembic upgrade head` into startup; add `graph_meta.version` and mix it into
+   both cache key sets; gate `ensure_seeded` on (trust signature, graph version).
+   The engine-write cost spike is already done: 87 ms/mutation, measured.
+1. **Extraction library + fixtures** (hermetic JSON artefacts, acceptance numbers above).
+2. **Matching + draft persistence** — tables, migration, `POST /api/uploads`, review
+   endpoints. No graph writes.
+3. **a)** `mr_put_edges` engine patch (or the async fallback) + confirm path writing
+   `works`/`citations`/`graph_edges` + engine push + reconcile sweep.
+   **b)** trust rows with `trust_sources` + undo + visibility filter.
+4. **UI** (+ KNOWN_ISSUES entries land with the stage that makes them true, not batched).
+5. **Playwright end-to-end + docs.**
 
-- Unit: the splitter scorer, column clustering, per-entry normalisation, DOI/arXiv regexes.
-- Integration against the live stack: upload → draft → confirm → new nodes exist in
-  `graph_edges` *and* in the engine → trust rows carry `upload_id` → `DELETE` unwinds it.
-- Playwright: upload → review → confirm → seeds appear and the ranking changes.
+Stage 2 is independently shippable as corpus-only trust seeding if stage 3 stalls.
 
-## Honest consequences to document in KNOWN_ISSUES.md
+## Honest consequences (KNOWN_ISSUES entries, landing with their stages)
 
-1. **Uploads write into a graph shared by every profile.** One user's upload changes other
-   users' rankings. This is inherent to the engine holding a single graph; this is simply
-   the first feature that lets a user write to it.
-2. **A bibliography is not an endorsement.** People cite work they are refuting. Blanket
-   5/5 overstates trust; the mitigation is provenance tagging and one-click undo, not a
-   claim that the semantics are correct.
-3. **Recall will be uneven.** Strong on modern DOI-bearing bibliographies, materially worse
-   on older, non-DOI, or unusually formatted ones. The failure mode is deliberately
-   "N entries need your eyes", never silent mis-trust.
-4. **Self-citations are included**, like any other reference. Citing your own prior work
-   is normally you pointing at the thing you most stand behind, so excluding it was
-   over-cautious. They are still *labelled* in the review table so the choice is visible
-   and a user can untick them, but nothing is dropped automatically.
-
-   Note on the justification, because it matters: the argument "MeritRank is sybil
-   tolerant so this is safe" is the one claim this build measured and **could not
-   confirm** — the citation-ring experiment came back at a ratio of 1.00 +/- 0.23, no
-   measurable suppression versus plain personalised PageRank (README, measurements).
-   Including self-citations is still the right call on its own merits, but it should not
-   be justified by a sybil-tolerance property we have not demonstrated. If someone later
-   uploads a large body of heavily self-citing work, nothing in this system is known to
-   discount it.
-
-## Implementation phasing
-
-This is a large feature for one plan, so it is staged. Each stage is independently
-verifiable, and stage 1 is where the risk lives — if extraction is poor on real fixtures,
-that is worth knowing before any UI exists.
-
-1. **Extraction library + fixtures.** `pdf_extract.py`, the four splitters, the scorer,
-   column clustering, normalisation. Verified against the four real OA PDFs. No API, no DB.
-2. **Matching + draft persistence.** `uploads`/`upload_references` tables, the matching
-   precedence, `POST /api/uploads` and `GET /api/uploads/{id}`. Draft only, nothing applied.
-3. **Confirm path.** Node creation (including `UL…` local ids), `graph_edges` writes,
-   incremental `mr_put_edge`, trust rows with `upload_id`, and `DELETE` unwind.
-4. **UI.** `/#/uploads`, review table, trust-screen grouping, undo-all.
-5. **Playwright + KNOWN_ISSUES entries.**
+1. Uploads write into a graph shared by every profile; exclusion is display-level only.
+2. A bibliography is not an endorsement; 3/5 + provenance + undo is mitigation, not a
+   claim the semantics are exact.
+3. Nothing in this system measurably discounts coordinated or self-citation-heavy
+   uploads — the sybil result was 1.00 ± 0.23. Labelling and default-exclusion are the
+   actual defence.
+4. Recall degrades hardest on undated-book bibliographies — pre-2000 work, exactly
+   where the corpus is weakest. Failure mode is review, never silent mis-trust.
+5. One upload globally invalidates ranking caches: other users' next read is a cold
+   one. Chosen deliberately over serving stale scores.
+6. Engine node names from deleted uploads persist until restart (registry never shrinks).
 
 ## Out of scope
 
-ORCID sweep of an author's whole corpus; BibTeX of one's own papers; PDF full-text
-indexing beyond the bibliography; re-running the graph build after upload (edges are
-applied incrementally instead).
+ORCID sweep; per-upload visibility granularity (one global toggle in v1); incremental
+coupling/co-citation (regenerated on next full rebuild); moderation tooling; full-text
+indexing beyond the bibliography.

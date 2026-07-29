@@ -274,3 +274,17 @@ but never driven end to end: **distrust edges**, **BibTeX import**, and the
 -- testing it means computing a node's screen position from sigma's camera, which tests
 the renderer rather than the product; the keyboard-accessible node list that performs
 the same action *is* asserted.
+
+---
+
+## 16. Alembic is present but never runs — column additions will not reach live databases
+
+Found during adversarial review of the upload-feature spec. `api/Dockerfile` copies
+`alembic.ini` and `alembic/` into the image, but nothing — no compose command, no
+entrypoint, no startup hook — ever executes `alembic upgrade head`. The live schema
+comes entirely from `Base.metadata.create_all()`, which creates missing *tables* but
+never adds *columns* to existing ones. Consequence: any future column addition works on
+a fresh `docker compose down -v` and silently fails on every existing database — the
+worst possible failure shape. Fix scheduled as stage 0 of the upload feature
+(`docs/superpowers/specs/2026-07-29-own-papers-bibliography-trust-design.md`), but it
+is a defect of the current app independent of that feature.
