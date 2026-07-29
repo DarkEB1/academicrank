@@ -58,13 +58,15 @@ def search(
             " w.cited_by_count DESC LIMIT :lim OFFSET :off"
         ), params).all()
     else:
-        db.execute(text("SET LOCAL pg_trgm.similarity_threshold = :t"),
-                   {"t": TRGM_THRESHOLD})
+        # SET does not accept bind parameters; set_config(..., is_local => true) is
+        # the parameterisable, transaction-scoped equivalent.
+        db.execute(text("SELECT set_config('pg_trgm.similarity_threshold', :t, true)"),
+                   {"t": str(TRGM_THRESHOLD)})
         total = int(db.execute(text(
-            "SELECT count(*) FROM works w WHERE w.title %% :q" + year_sql
+            "SELECT count(*) FROM works w WHERE w.title % :q" + year_sql
         ), params).scalar_one())
         rows = db.execute(text(
-            "SELECT w.id FROM works w WHERE w.title %% :q" + year_sql +
+            "SELECT w.id FROM works w WHERE w.title % :q" + year_sql +
             " ORDER BY similarity(w.title, :q) DESC, w.cited_by_count DESC"
             " LIMIT :lim OFFSET :off"
         ), params).all()

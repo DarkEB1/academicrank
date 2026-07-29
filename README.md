@@ -120,7 +120,69 @@ citation edge to be silently discarded. Full reasoning in `DECISIONS.md` D1.
 
 ## Does MeritRank earn its place? The measurements
 
-<!--MEASUREMENTS-->
+The brief asked for the sybil experiment to be the strongest evidence that MeritRank
+earns its place here. Run honestly, **it is not.** Both results below are as measured.
+
+### 1. It correlates with personalised PageRank, but does not match it
+
+A NetworkX personalised-PageRank baseline over the identical graph and seed set.
+
+| Measure | Value (4 runs) |
+|---|---|
+| nodes compared | 27,937 |
+| Spearman rank correlation | **0.334** (sd 0.052) |
+| Kendall tau | 0.252 |
+| top-50 overlap | 54% |
+
+Moderate agreement, nowhere near identity. The two algorithms genuinely rank
+differently — which is a precondition for MeritRank being worth the trouble, but is not
+by itself evidence that its differences are *improvements*.
+
+### 2. Sybil suppression: no measurable effect
+
+20 synthetic papers citing each other densely, attached to the real corpus by a single
+edge, scored from the same seed set under both algorithms. Repeated 4 times, because
+MeritRank scores are Monte Carlo estimates and one run cannot separate an effect from
+sampling noise.
+
+| Algorithm | Share of total score captured by the ring |
+|---|---|
+| personalised PageRank (deterministic) | 0.2168% |
+| **MeritRank** (mean of 4) | **0.2168%** (sd 0.0498) |
+
+| MeritRank / PPR ratio | |
+|---|---|
+| mean | **1.000** |
+| standard deviation | 0.230 |
+| range across runs | 0.703 – 1.348 |
+
+**A ratio of 1.00 +/- 0.23 means MeritRank neither suppressed nor amplified the citation
+ring relative to plain PageRank, within noise.** Individual runs ranged from 0.70
+(looks like suppression) to 1.35 (looks like amplification). Quoting the 0.70 run as
+evidence of sybil resistance — which a single-run experiment would have done, and an
+earlier sparser build of this graph did — would have been a measurement artefact.
+
+Why the null result, honestly:
+
+- At `MERITRANK_NUM_WALKS=10000` over ~111k nodes, the score of a 20-node ring reachable
+  through one edge is small enough that sampling noise swamps it. The experiment as
+  designed cannot resolve an effect of this size; a much larger walk count would be
+  needed to say anything, and that was not run.
+- The ring is attached by a *bidirectional* edge to a genuinely trusted paper, so some
+  trust legitimately flows in. Connectivity decay should discount a subgraph reachable
+  through a single bottleneck, but any discount applied here is below the noise floor.
+- Transitivity and connectivity decay are compiled into `meritrank_core` with no runtime
+  surface (`KNOWN_ISSUES.md` §1), so they cannot be varied to isolate their contribution.
+
+**What this means for the project:** on this evidence the choice of MeritRank over
+personalised PageRank is *unproven*. It remains defensible on the paper's arguments and
+on the decay mechanisms being present in the engine, but this build does not demonstrate
+a sybil-resistance benefit against citation-ring-shaped attacks, and this README will not
+claim one. It is the single result I would most want another eight hours to chase.
+
+Reproduce with `python scripts/sybil_experiment.py`; per-run numbers in
+`data/sybil_results.json`.
+
 
 ---
 
@@ -137,14 +199,25 @@ being wrong.
 tokenomic feedback systems, where an attacker pays a cost to create edges. A citation
 ring is a reasonable analogy but not an instance of that threat model: citations are
 free, real rings are small, and genuine citation manipulation is far subtler than a
-clique. The measured suppression above is evidence about *this graph under this
-specific attack*, not a general guarantee.
+clique. And in any case the measurement above found **no suppression effect at all**
+above the noise floor, so there is currently no empirical claim here to generalise from.
 
 **The decay mechanisms are largely unreachable.** Transitivity and connectivity decay —
 the entire reason for choosing MeritRank over personalised PageRank — are compiled into
 `meritrank_core` with no runtime surface. We cannot tune them or show you their values.
 Epoch decay in this product is *ours*, applied to edge weights at build time; it is not
 the paper's epoch decay. See `KNOWN_ISSUES.md` §1.
+
+**The corpus is statistics, not mathematics.** Built exactly as specified — OpenAlex
+field *Mathematics*, since 1990, by citation count — the result is dominated by
+statistical and biostatistical methodology, because OpenAlex files statistics under
+Mathematics and applied science cites it at a volume pure mathematics never reaches. The
+largest topics are Statistical Methods (1,191 papers), Bayesian Inference (1,151), Causal
+Inference (666), and *COVID-19 epidemiology* (331). The most-cited paper in the corpus is
+Rosenbaum & Rubin on propensity scores; the best-connected algebraic geometry paper has 8
+in-corpus citations against its 250. **A pure mathematician would open this and recognise
+almost nothing.** Stratified sampling across mathematics subfields would fix it and was
+not done — see `KNOWN_ISSUES.md` §5, which is the most serious item in this build.
 
 **Coverage bias.** OpenAlex under-represents non-English work, pre-digital literature,
 and some regions. Our corpus is ~7,200 full papers seeded from the most-cited

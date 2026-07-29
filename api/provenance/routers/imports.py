@@ -117,15 +117,16 @@ async def import_bibtex(
     unmatched: list[str] = []
 
     # --- pass 2: trigram title -------------------------------------------
-    db.execute(text("SET LOCAL pg_trgm.similarity_threshold = :t"),
-               {"t": TITLE_THRESHOLD})
+    # SET does not accept bind parameters; set_config(..., is_local => true) does.
+    db.execute(text("SELECT set_config('pg_trgm.similarity_threshold', :t, true)"),
+               {"t": str(TITLE_THRESHOLD)})
     for doi, title, label in parsed:
         if doi and doi in doi_map:
             matched_ids.append(doi_map[doi])
             continue
         if title:
             row = db.execute(text(
-                "SELECT id FROM works WHERE title %% :t "
+                "SELECT id FROM works WHERE title % :t "
                 "ORDER BY similarity(title, :t) DESC LIMIT 1"
             ), {"t": title}).first()
             if row is not None:

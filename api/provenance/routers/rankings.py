@@ -115,7 +115,9 @@ def recommendations(
 
     seed_ids = [t.work_id for t in db.query(Trust).filter(
         Trust.profile_id == profile.id, Trust.is_distrust.is_(False)).all()]
-    dist = services.trust_set_distances(db, seed_ids)
+    sig, _n = services.trust_signature(db, profile)
+    dist = services.trust_set_distances(
+        db, seed_ids, cache_key=(profile.id, sig, services.graph_generation(db)))
 
     scored: list[tuple[float, float, ranking.RankedItem]] = []
     for item in pool.items:
@@ -399,12 +401,15 @@ class _ScratchEgo:
         self._written.append(node)
 
     def clear(self) -> None:
-        mr = services.mr_of(self.db)
         for node in self._written:
             try:
-                mr.delete_edge(self.name, node, config.AGGREGATE)
+                services.mr_of(self.db).delete_edge(self.name, node, config.AGGREGATE)
             except Exception:  # noqa: BLE001
-                pass
+                # A failed mr_* call aborts the Postgres transaction, so every
+                # subsequent statement on this session would fail too unless we
+                # rewind. Teardown must keep going: the remaining edges still need
+                # deleting.
+                self.db.rollback()
         self._written.clear()
 
     def __exit__(self, *exc) -> None:

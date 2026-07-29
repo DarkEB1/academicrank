@@ -87,7 +87,53 @@ measure, and it inherits the citation bias of its seed set.
 
 ---
 
-## 5. Corpus coverage
+## 5. The corpus is not really mathematics -- it is statistics and biostatistics
+
+**This is the most serious product-level problem in the build, and I found it late.**
+
+The corpus was built exactly as specified: OpenAlex field Mathematics
+(`primary_topic.field.id:fields/26`), `publication_year >= 1990`, sorted by
+`cited_by_count:desc`. What comes back is dominated by statistical methodology, because
+OpenAlex files statistics and biostatistics under Mathematics and those papers are cited
+by the entire applied scientific literature at a volume pure mathematics never reaches.
+
+Measured composition of the 7,211 full papers, by topic:
+
+| Topic | Papers |
+|---|---|
+| Statistical Methods and Inference | 1,191 |
+| Statistical Methods and Bayesian Inference | 1,151 |
+| Advanced Statistical Methods and Models | 970 |
+| Advanced Causal Inference Techniques | 666 |
+| Statistical Methods in Clinical Trials | 502 |
+| Bayesian Methods and Mixture Models | 376 |
+| **COVID-19 epidemiological studies** | 331 |
+| Advanced Optimization Algorithms Research | 308 |
+
+The single most-cited paper in the corpus is Rosenbaum & Rubin (1983) on propensity
+scores, with 250 in-corpus citations. By contrast the best-connected algebraic geometry
+paper has **8**.
+
+**Consequence:** the stated audience of this product is working mathematicians, and a
+pure mathematician would open it and recognise almost nothing. Searching "algebraic
+geometry" returns real results, but they sit in a graph with almost no pure-mathematics
+neighbourhood, so their personalised rankings are thin and the meta-paths are weak. The
+demo is best driven from statistics/causal-inference seeds, which is what DEMO.md does --
+that is making the best of the corpus, not a design choice.
+
+**The fix, not applied:** sort-by-citations globally is the culprit. Stratified sampling
+would fix it -- resolve the *subfields* under Mathematics and take the top N papers
+within each (algebra, topology, number theory, analysis, geometry, logic, ...) rather
+than the top 3,000 overall. That yields a corpus a mathematician recognises, at the cost
+of lower absolute citation counts and a sparser citation graph. It needs a re-scrape, a
+reload and a graph rebuild. I chose not to start that with the end-to-end suite already
+running against the current dataset and no one awake to recover a half-migrated state --
+but it is the first thing I would change, and it is a bigger deal than anything else on
+this list.
+
+---
+
+## 6. Corpus coverage (general)
 
 ~7,200 full papers and ~52,000 stubs, seeded from the 3,000 most-cited mathematics
 works since 1990. This is a demo-scale corpus, not the literature:
@@ -101,7 +147,7 @@ works since 1990. This is a demo-scale corpus, not the literature:
 
 ---
 
-## 6. Distrust is our extension, not the paper's
+## 7. Distrust is our extension, not the paper's
 
 Negative edge weights are accepted by the engine (VSIDS takes `weight.abs()`, and
 `mr_graph` has a `positive_only` flag, implying negatives exist). We encode distrust as
@@ -111,7 +157,7 @@ behaviour under the decay mechanisms is not something the paper guarantees.
 
 ---
 
-## 7. Sybil resistance is tested by analogy
+## 8. Sybil resistance
 
 MeritRank's sybil tolerance was derived for tokenomic feedback systems where the
 attacker pays a cost to create edges. A citation ring is a reasonable analogy but not
@@ -122,7 +168,7 @@ general guarantee.
 
 ---
 
-## 8. Bulk load is global, shared state
+## 9. Bulk load is global, shared state
 
 `mr_bulk_load_edges` **clears all engine state** and every user shares one graph. So:
 
@@ -136,7 +182,7 @@ general guarantee.
 
 ---
 
-## 9. Operational
+## 10. Operational
 
 - The stack pins `mr-service` to a static IP (172.28.0.10). Harmless, but it means the
   compose network subnet 172.28.0.0/16 must be free on the host.
@@ -146,7 +192,7 @@ general guarantee.
 
 ---
 
-## 10. Phase 1 Gate 2 is FAILED and shipped that way
+## 11. Phase 1 Gate 2 is FAILED and shipped that way
 
 **≥90% of full papers should have at least one resolved in-corpus reference. Measured
 69.7%; the ceiling for this corpus is 71.2%.**
@@ -162,7 +208,7 @@ for the product:** roughly 2,000 papers, disproportionately books and older work
 only be reached through *incoming* citations and entity edges, never through their own
 bibliography. They are systematically harder to surface than their importance warrants.
 
-## 11. Rankings are dominated by direct citation neighbours
+## 12. Rankings are dominated by direct citation neighbours
 
 Measured on a 5-seed profile: **19 of the top 20 results were papers directly cited by,
 or directly citing, a seed.** ~10,500 papers receive a non-zero score, so the walk does
@@ -178,3 +224,23 @@ this, and they are where the interesting results actually live. A user who only 
 The divergence gate passes with Jaccard 0.000 across all three dissimilar seed pairs —
 but note that a *perfect* zero is partly an artefact of this same 1-hop dominance:
 disjoint seed sets have disjoint bibliographies. It is a real pass, not a strong one.
+
+---
+
+## 13. Search does not rank exact title matches first
+
+`/api/papers/search` uses Postgres `tsvector` relevance over title + abstract. An exact
+or near-exact title query frequently does not come back first — searching
+`Maximum Likelihood from Incomplete Data` returns that paper **third**, behind two
+loosely related ones, and `central role propensity score observational` does not return
+Rosenbaum & Rubin at all in the top 3.
+
+Cause: `ts_rank` over a concatenated title+abstract vector treats a title hit and an
+abstract hit alike, and long abstracts dilute the signal. The fix is a weighted vector
+(`setweight(to_tsvector(title),'A') || setweight(to_tsvector(abstract),'B')`) plus a
+trigram similarity boost on the title, which the schema already has an index for
+(`ix_works_title_trgm`). Not applied — found while scripting the demo, and it changes a
+query path the end-to-end suite was already running against.
+
+Practical effect: users must scan a few results rather than getting the paper they typed.
+DEMO.md therefore states which result position to take for each seed.

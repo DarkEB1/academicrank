@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Response, status
 
 from .. import config, ranking, schemas, services
 from ..deps import COOKIE_NAME, CurrentProfile, DbSession, OwnedProfile
-from ..models import Profile, Trust, Work
+from ..models import Profile, Trust, Work, work_node
 
 router = APIRouter(prefix="/api", tags=["profiles"])
 
@@ -100,15 +100,19 @@ def set_trust(
     existing = db.get(Trust, {"profile_id": profile.id, "work_id": body.work_id})
     if body.strength == 0:
         if existing is not None:
+            db.delete(existing)
+            db.commit()
             # Drop the engine edge too, otherwise the removed seed keeps contributing
-            # until the next graph rebuild.
+            # until the next graph rebuild. Best effort and *after* the commit: the
+            # edge legitimately may not exist (mr_bulk_load_edges clears engine state),
+            # and a failed mr_* call aborts the surrounding Postgres transaction, so it
+            # must not be sharing one with the row delete.
             try:
                 services.mr_of(db).delete_edge(
-                    profile.node, f"U{body.work_id}", config.AGGREGATE
-                )
+                    profile.node, work_node(body.work_id), config.AGGREGATE)
+                db.commit()
             except Exception:  # noqa: BLE001 - the row is the source of truth
-                pass
-            db.delete(existing)
+                db.rollback()
     elif existing is None:
         db.add(Trust(
             profile_id=profile.id, work_id=body.work_id,

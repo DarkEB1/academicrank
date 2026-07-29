@@ -1,0 +1,15 @@
+{
+  "ppr_comparison": {
+    "n": 27296,
+    "spearman": 0.3045519917338752,
+    "kendall": 0.22773443597609486,
+    "top50_overlap": 0.66
+  },
+  "sybil": {
+    "ring_size": 20,
+    "meritrank_share_pct": 0.15244620011329368,
+    "ppr_share_pct": 0.21684315234565812,
+    "ratio": 0.7030251980025051,
+    "suppression_factor": 1.4224241219820926
+  }
+}

@@ -484,30 +484,42 @@ def year_filter(
 # ---------------------------------------------------------------------------
 
 MAX_NOVELTY_DEPTH = 4
-_FRONTIER_CAP = 6000
+# Per-level cap on newly discovered nodes, applied by descending edge weight so a hub
+# topic node cannot make one level cost the whole corpus. Generous enough that levels
+# 1-3 are complete in practice; without it a 4-hop expansion touches most of the graph.
+_FRONTIER_CAP = 30000
+
+_dist_cache: dict[tuple, tuple[float, dict[str, int]]] = {}
+_dist_lock = threading.Lock()
+_DIST_TTL = 600.0
 
 
 def trust_set_distances(
-    db: Session, seed_work_ids: Sequence[str], max_depth: int = MAX_NOVELTY_DEPTH
+    db: Session, seed_work_ids: Sequence[str], max_depth: int = MAX_NOVELTY_DEPTH,
+    cache_key: tuple | None = None,
 ) -> dict[str, int]:
     """BFS over `graph_edges` from the trust set. Returns work_id -> hop count.
 
-    This is a real graph distance over exactly the edges the scores were computed
-    from, not a proxy. Frontiers are capped by descending edge weight so a hub topic
-    node cannot make one level cost the whole corpus.
+    A real graph distance over exactly the edges the scores were computed from, not a
+    proxy for one.
     """
-    dist: dict[str, int] = {}
+    if cache_key is not None:
+        now = time.time()
+        with _dist_lock:
+            hit = _dist_cache.get(cache_key)
+            if hit is not None and now - hit[0] < _DIST_TTL:
+                return hit[1]
+
+    dist: dict[str, int] = {w: 0 for w in seed_work_ids}
     frontier = [work_node(w) for w in seed_work_ids]
     seen: set[str] = set(frontier)
-    for w in seed_work_ids:
-        dist[w] = 0
     depth = 0
     while frontier and depth < max_depth:
         depth += 1
         rows = db.execute(
             text(
                 "SELECT dst FROM graph_edges WHERE src = ANY(:nodes) "
-                "ORDER BY weight DESC LIMIT :cap"
+                "GROUP BY dst ORDER BY max(weight) DESC LIMIT :cap"
             ),
             {"nodes": frontier, "cap": _FRONTIER_CAP},
         ).all()
@@ -521,6 +533,12 @@ def trust_set_distances(
             if wid is not None and wid not in dist:
                 dist[wid] = depth
         frontier = nxt
+
+    if cache_key is not None:
+        with _dist_lock:
+            if len(_dist_cache) >= _POOL_MAX:
+                _dist_cache.pop(min(_dist_cache, key=lambda k: _dist_cache[k][0]), None)
+            _dist_cache[cache_key] = (time.time(), dist)
     return dist
 
 
