@@ -110,3 +110,191 @@ external referenced works:                                              59569
 full works written: 7211      stubs written: 51917
 API requests: 1209 (~12k credits of the 100k/day budget)
 ```
+
+**00:44** Re-scraped after the loader flagged a defect in `scrape.py`: the snowball
+`referrer_count` was built from the 3,000 seed works only, so the 4,211 promoted works'
+references were never stubbed and 55,889 citations (29%) were dropped as dangling at
+load time. Fixed by unioning promoted references into the stub set.
+
+```
+before: 59,128 works   135,098 citations
+after:  96,751 works   181,388 citations   (+34% citation density)
+stubs hydrated: 89,540    API requests: 1,910 (~19k credits)
+```
+
+**Phase 1 gate:** papers >= 2,500 **PASS** (7,211). Papers with a resolved in-corpus
+reference >= 90% **FAIL** (71.16%, ceiling 71.17%). 2,079 full works ship from OpenAlex
+with an empty `referenced_works` list. Deliberately not massaged — DECISIONS.md D6.
+
+---
+
+## Phase 2 — graph construction
+
+Papers as `U` nodes, entities as `B` nodes (forced by the engine, D1.6). Entity
+out-edges hub-damped `1/sqrt(corpus_degree)`; topic edges IDF-scaled; coupling and
+co-citation capped per paper so a 400-reference review cannot dominate.
+
+```
+TOTAL 583,122 edges in 6.3s
+  citations 181,388 -> 362,776 edges     coupling 43,823     co-citation 72,019
+  authorship 16,850   topics 18,693      venues 6,415        affiliations 10,294
+bulk_load returned in 24.4s              <- gate: under 2 minutes, PASS
+contexts: aggregate 111,552 | citation 96,340 | author 106,919 | topic 97,828
+          venue 97,770 | institution 98,861
+```
+
+**Phase 2 gate — divergence:** PASS. Three dissimilar seed pairs, Jaccard 0.000 across
+all three. Noted in KNOWN_ISSUES #12 that a *perfect* zero is partly an artefact of
+1-hop dominance rather than a strong result.
+
+---
+
+## Phase 3 — ranking layer
+
+Per-context composition in Python (`baseline + Σ w_c · marginal_c`) because
+`mr_bulk_load_edges` is global state and per-user weights cannot be done by reloading
+the graph (D4). Uncertainty by leave-one-out (D5).
+
+Three real bugs found by execution, not inspection:
+
+1. `text("... :src::text[] ...")` — SQLAlchemy's bind parser eats a parameter followed
+   by `::`. Silently bound only the final argument. Fixed with `CAST(...)`.
+2. `compose()` treated "node absent from this context" as score 0, so every context
+   subtracted a full baseline and top scores went **negative** (−0.26 for the top paper).
+   Fixed by imputing *no marginal contribution* instead.
+3. `node_to_work_id` matched any `U`-prefixed node, so scratch egos leaked into rankings
+   as phantom papers — the ego scores itself highest, so it appeared at **rank 1 with no
+   title** and a score 40× the real #1.
+
+**Phase 3 gate:** warm 45 ms (gate <500 ms) **PASS**; cold 50.9 s recorded. Cold is one
+`mr_scores` per context plus one per context per leave-one-out replicate, each building
+walks lazily. Raw per-context scores are cached against the trust-set signature, so the
+cache self-invalidates on any trust change and slider moves re-compose without touching
+the engine.
+
+Tie grouping was rewritten: the anchored test collapsed the entire ranking into one tie
+group (technically true, useless to read). The pairwise test now separates rank 1 and
+brackets 2–8, which is both honest and legible.
+
+---
+
+## Phases 4 & 5 — API and frontend
+
+16 endpoints against `API_CONTRACT.md`, driven end to end with real data: profile →
+search → trust → rankings → explain. The explanation returns genuine reconstructed
+paths, including 2-hop meta-paths through topic and author nodes, plus a per-context
+decomposition (citation 0.771, topic 0.132, author 0.055, institution 0.035, venue 0.007
+on the sampled paper).
+
+Frontend: six routed screens, 62 vitest tests, clean production build. Two integration
+defects fixed at wiring time — a missing `@types/node` that broke the Docker build, and
+the absence of a web Dockerfile/nginx config (same-origin `/api` proxy so the profile
+cookie works without CORS).
+
+---
+
+## Phase 6 / hardening
+
+Cold-start bootstrap added after realising the final gate could not pass: `down -v`
+empties Postgres **and** mr-service loses the whole graph on any restart because it is
+held in memory. `bootstrap.py` repairs both on a background thread.
+
+The sybil experiment was re-run four times after the citation-density fix. See the
+README — the result is a null one, and it is the most important thing I learned tonight.
+
+**Live verification of the two personalisation claims** (against the running stack, not
+unit tests):
+
+```
+diversity dial, same 3-seed profile:
+  diversity=0.0  -> Statistical Analysis With Missing Data / Estimating causal effects /
+                    Analysis of Incomplete Multivariate Data      (novelty 0.25, 1 hop)
+  diversity=1.0  -> Lasso / Gibbs Distributions / Monte Carlo sampling via Markov chains
+                                                                  (novelty 1.00, 4+ hops)
+  overlap between the two ends: 0.00
+context weights author=3.0, topic=venue=institution=0:  top-20 order changed = True
+```
+
+Both are genuinely live and per-user, which is the claim the parameter playground makes.
+
+---
+
+## Phase 6 — deliberately not started
+
+Phases 0–5 are green (with Gate 2 explicitly failed and documented), so by the brief
+Phase 6 was available. I did not take it, for two reasons.
+
+The item I most wanted to build was the **citation-ring detector** — "flag dense,
+externally-sparse clusters and show how connectivity decay already discounts them."
+After the sybil measurement came back at 1.00 ± 0.23, I could not build that screen
+honestly: it would assert a discount this build has no evidence for. Shipping a feature
+whose entire premise I had just failed to demonstrate would have been the worst thing in
+the repository.
+
+The rest of the stretch list would have been new surface area at a point where the
+better use of the time was making the existing surface true — verifying the diversity
+dial and context weights actually move results, getting cold start to work from a wiped
+volume, and writing down the corpus problem I had just found.
+
+---
+
+## Final entry — what I would do with another eight hours
+
+**In priority order.**
+
+1. **Fix the corpus.** It is statistics, not mathematics (KNOWN_ISSUES §5). Sorting
+   OpenAlex field 26 by citation count returns Rubin, Dempster and COVID epidemiology,
+   and the best-connected algebraic geometry paper has 8 in-corpus citations against
+   Rosenbaum & Rubin's 250. Stratified sampling across mathematics subfields — top N per
+   subfield rather than top 3,000 overall — is maybe two hours including re-scrape,
+   reload and rebuild. Everything else on this list matters less than this, because the
+   stated audience currently opens the product and recognises nothing.
+
+2. **Settle the sybil question properly.** The null result is honest but unsatisfying.
+   Raise `MERITRANK_NUM_WALKS` by 5–10× to drop the noise floor below the effect size,
+   re-run 20+ trials rather than 4, and vary the ring's attachment (single inbound edge
+   vs bidirectional, one anchor vs several). Right now I cannot say whether connectivity
+   decay does nothing here or whether my instrument is too blunt to see it — and that
+   distinction is the whole justification for choosing MeritRank.
+
+3. **Cold start of 50.9 s.** Acceptable because it is warmed on trust-set save and warm
+   is 45 ms, but it is 25 lazy walk builds for a 5-seed profile. Leave-one-out could run
+   asynchronously and stream in, or reuse a single scratch ego across replicates.
+
+4. **Weighted search vectors.** Exact title matches not ranking first (KNOWN_ISSUES §13)
+   is a twenty-minute fix — `setweight` on title vs abstract plus a trigram boost on the
+   title, whose index already exists — and it is the first thing a user touches.
+
+5. **Push past 1-hop dominance.** 19 of the top 20 being direct citation neighbours
+   makes the default view duller than the system deserves. I would try lowering `cites`
+   toward 0.6, raising the entity weights, and measuring the effect on the divergence
+   check rather than guessing.
+
+### The decisions I am least confident about
+
+**The composition formula.** `score = baseline + Σ w_c · (score_c − baseline)` is a
+reasonable reading of a constraint the engine forced on me (User→User edges replicate
+into every context, so contexts are not isolable). But the per-context scores are
+probability-like distributions over *different node sets*, and subtracting them is not
+obviously sound. It behaves well and the weights demonstrably move results — but I
+derived it under time pressure and I would want to argue it through properly, or replace
+it with a rank-space combination that does not assume the scales are commensurable.
+
+**Papers as `U` nodes.** Forced, and I am confident it was the only workable choice. What
+I am *not* confident about is the second-order effect: every paper is now a "User" to an
+engine built for a social network, so `hide_personal`, node ownership and the
+zero-opinion machinery are all operating on a domain they were never designed for. I
+disabled zero-opinion (`ZERO_OPINION_FACTOR=0.0`) rather than reason about it. Something
+subtle may be wrong there and I would not currently detect it.
+
+**Leave-one-out as the uncertainty measure.** It answers a real question and I would
+defend shipping it. But I am presenting a *sensitivity* as though it were an *error bar*,
+and the tie-grouping threshold (mean of adjacent standard errors) was chosen because the
+first version collapsed everything into one group — which is a suspicious reason to
+choose a statistical threshold. It is calibrated to look right, not derived.
+
+**Trusting three subagents with the API, the frontend and the loader.** It parallelised
+the night and the loader in particular caught a 56k-citation bug in my own scraper that I
+would not have found. But I verified their work by driving it, not by reading all of it,
+and the frontend was built against a contract rather than a running backend. The E2E
+suite is the only thing standing between that and an integration surprise.

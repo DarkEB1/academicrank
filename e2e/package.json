@@ -1,14 +1,16 @@
 {
-  "name": "e2e",
+  "name": "provenance-e2e",
+  "private": true,
   "version": "1.0.0",
-  "main": "index.js",
+  "type": "module",
+  "description": "End-to-end acceptance suite for Provenance, run against the live docker-compose stack.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:journey": "playwright test tests/01-journey.spec.ts",
+    "report": "playwright show-report",
+    "install:browser": "playwright install chromium"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "devDependencies": {
     "@playwright/test": "^1.62.0",
     "@types/node": "^26.1.2",
