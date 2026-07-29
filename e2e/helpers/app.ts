@@ -60,12 +60,16 @@ export async function paramsTopTwenty(page: Page): Promise<string[]> {
  * else is a test failure.
  */
 export const CONSOLE_NOISE: RegExp[] = [
+  // Software WebGL under headless Chromium is expected, not an app fault.
   /SwiftShader/i,
   /software (webgl|rendering)/i,
   /Automatic fallback to software webgl/i,
   /GroupMarkerNotSet/i,
   /Failed to create GLES3 context/i,
-  /favicon/i,
+  // The browser asks for /favicon.ico unprompted; the app ships no favicon, so
+  // nginx answers 404. Chrome logs that as a console error. It is the browser's
+  // request, not the application's.
+  /favicon\.ico/i,
 ];
 
 export type Collected = { errors: string[]; pageErrors: string[] };
@@ -74,7 +78,10 @@ export function collectConsole(page: Page, ignore: RegExp[] = CONSOLE_NOISE): Co
   const collected: Collected = { errors: [], pageErrors: [] };
   page.on('console', (msg: ConsoleMessage) => {
     if (msg.type() !== 'error') return;
-    const text = msg.text();
+    // Resource-load failures carry the URL in the location, not the text, so
+    // record both — otherwise "404 (Not Found)" is undiagnosable.
+    const url = msg.location()?.url ?? '';
+    const text = url ? `${msg.text()} [${url}]` : msg.text();
     if (ignore.some((re) => re.test(text))) return;
     collected.errors.push(text);
   });

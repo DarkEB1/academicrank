@@ -1,10 +1,12 @@
+import { API_BASE } from './env';
+
 /**
  * Thin typed client for the live Provenance API.
  *
  * The browser talks to nginx on :5173 which proxies /api; from Node we go
  * straight to :8000. Both hit the same FastAPI process.
  */
-export const API_BASE = process.env.PROVENANCE_API ?? 'http://localhost:8000/api';
+export { API_BASE };
 
 export type PaperBrief = {
   id: string;

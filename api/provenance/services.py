@@ -40,8 +40,10 @@ from .models import (
 
 # How many scored nodes we pull from the engine per context. The corpus is ~60k works
 # but a single ego reaches far fewer with non-negligible weight.
-POOL_FETCH = 4000
-GLOBAL_FETCH = 4000
+# Widened from 4000: stubs are now filtered out of results, and stubs are 89,540 of
+# the 96,751 works, so a 4000-node window left far too few full papers to rank.
+POOL_FETCH = 12000
+GLOBAL_FETCH = 12000
 
 
 def mr_of(db: Session) -> MeritRank:

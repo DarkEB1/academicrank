@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { WEB_ORIGIN } from './helpers/env';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -36,7 +37,9 @@ export default defineConfig({
   reporter: [['list'], ['html', { outputFolder: path.join(here, 'playwright-report'), open: 'never' }]],
 
   use: {
-    baseURL: 'http://localhost:5173',
+    // http://127.0.0.1:5173 — the docker `web` container (nginx, built app).
+    // See helpers/env.ts for why this is not spelled `localhost`.
+    baseURL: WEB_ORIGIN,
     actionTimeout: 120_000,
     navigationTimeout: 120_000,
     screenshot: 'only-on-failure',

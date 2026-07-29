@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apiClient, SEED_QUERIES } from './helpers/api';
+import { WEB_ORIGIN } from './helpers/env';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const AUTH_DIR = path.join(here, '.auth');
@@ -43,6 +44,28 @@ async function globalSetup(): Promise<void> {
   console.log(
     `[global-setup] stack healthy: ${health.nodes} nodes, ${health.edges} edges in the graph`,
   );
+
+  // Reuse a previously built warm profile when it is still valid. The engine
+  // keeps its walks warm, so a repeat run costs seconds instead of a minute.
+  // `E2E_FRESH_PROFILE=1` forces a rebuild.
+  if (!process.env.E2E_FRESH_PROFILE && fs.existsSync(WARM_PROFILE) && fs.existsSync(WARM_STATE)) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(WARM_PROFILE, 'utf8')) as WarmProfile;
+      const me = await apiClient.me(cached.token);
+      if (me.id === cached.profileId && me.trust_count >= 5) {
+        // Reset the parameters in case an earlier run left a weight moved.
+        await apiClient.setParams(cached.profileId, cached.token, {
+          context_weights: { citation: 1, author: 1, topic: 1, venue: 1, institution: 1 },
+        });
+        await apiClient.rankings(cached.profileId, cached.token, { limit: 25 });
+        // eslint-disable-next-line no-console
+        console.log(`[global-setup] reusing warm profile ${cached.profileId} (5 seeds)`);
+        return;
+      }
+    } catch {
+      // Stale token or a rebuilt database: fall through and mint a new one.
+    }
+  }
 
   const profile = await apiClient.createProfile();
   const seedIds: string[] = [];
@@ -95,7 +118,7 @@ async function globalSetup(): Promise<void> {
         cookies: [],
         origins: [
           {
-            origin: 'http://localhost:5173',
+            origin: WEB_ORIGIN,
             localStorage: [
               { name: 'provenance.token', value: profile.token },
               { name: 'provenance.profileId', value: profile.id },

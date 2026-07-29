@@ -272,7 +272,9 @@ def _summary(
         phrase = _RELATION_PHRASE.get(e.relation, e.relation)
         via = top.nodes[i + 1].label if i + 1 < len(top.nodes) else ""
         last = i == len(top.edges) - 1
-        _parts.append(phrase if last or not via else f"{phrase} {via}")
+        # The last hop lands on the target, which is already the subject of the
+        # sentence, so it takes a pronoun rather than repeating its own title.
+        _parts.append(f"{phrase} it" if last else (f"{phrase} {via}" if via else phrase))
     rels = ", ".join(_parts)
     strongest = max(
         (c for c in by_context if c["context"] != config.BASELINE_CONTEXT),
