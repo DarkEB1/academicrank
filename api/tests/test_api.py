@@ -480,11 +480,16 @@ def test_simulate_is_a_non_destructive_counterfactual(
     assert {t["work"]["id"] for t in before_trust} == \
            {t["work"]["id"] for t in after_trust}
 
-    # ...and the scratch ego left nothing behind in the engine
+    # ...and the scratch ego left no edges behind in the engine.
+    #
+    # Edges, not nodes: the engine's node registry assigns every name an id for the
+    # lifetime of the process and mr_delete_node does not un-register the name, so
+    # `Usim_*` keeps appearing in mr_nodelist() forever. What actually matters for
+    # non-destructiveness is that no scratch edge survives to influence a later walk.
     with SessionLocal() as db:
-        leftovers = [n for n in db.execute(
-            text("SELECT node FROM mr_nodelist('')")).scalars()
-            if n.startswith("Usim_")]
+        leftovers = [(s, d) for s, d, _w in db.execute(
+            text("SELECT src, dst, weight FROM mr_edgelist('')")).all()
+            if s.startswith("Usim_")]
         db.commit()
     assert not leftovers, leftovers
 

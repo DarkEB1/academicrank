@@ -262,7 +262,18 @@ def _summary(
     top = paths[0]
     seed_title = top.seed.title or top.seed.id
     hops = max(len(top.nodes) - 1, 1)
-    rels = " -> ".join(_RELATION_PHRASE.get(e.relation, e.relation) for e in top.edges)
+    # Interleave the intermediate node labels with the relation phrases. Joining the
+    # phrases alone produced sentences like "was written by -> who also wrote", which
+    # names nobody -- the whole point of the explanation is saying *who* or *what* the
+    # trust travelled through. The final hop lands on the target, whose title is already
+    # the subject of the sentence, so it is not repeated.
+    _parts: list[str] = []
+    for i, e in enumerate(top.edges):
+        phrase = _RELATION_PHRASE.get(e.relation, e.relation)
+        via = top.nodes[i + 1].label if i + 1 < len(top.nodes) else ""
+        last = i == len(top.edges) - 1
+        _parts.append(phrase if last or not via else f"{phrase} {via}")
+    rels = ", ".join(_parts)
     strongest = max(
         (c for c in by_context if c["context"] != config.BASELINE_CONTEXT),
         key=lambda c: abs(c["marginal"]), default=None,

@@ -166,7 +166,7 @@ def _scores_cached(
     return per_ctx, loo, seeds
 
 
-def warm(db: Session, profile: Profile, fetch: int = 4000) -> None:
+def warm(db: Session, profile: Profile, fetch: int = 12000) -> None:
     """Called on trust-set save so the first page view is not the slow one."""
     _scores_cached(db, profile, fetch)
 
@@ -178,14 +178,31 @@ def rank_profile(
     offset: int = 0,
     weights: dict[str, float] | None = None,
     exclude_trusted: bool = True,
-    fetch: int = 4000,
+    fetch: int = 12000,
+    include_stubs: bool = False,
 ) -> tuple[list[RankedItem], int, int, float]:
-    """Returns (items, total, seed_count, elapsed_ms)."""
+    """Returns (items, total, seed_count, elapsed_ms).
+
+    Stubs are excluded by default. A stub is a work referenced by fewer than three
+    corpus papers: we hold its id, title and year so citation edges don't dangle, but it
+    has no authors, venue, topics or abstract. There are 89,540 of them against 7,211
+    full papers, and they accumulate enough score to fill most of a top-25 with rows a
+    user can do nothing with -- observed in the end-to-end run before this was added.
+    They remain in the graph and still carry trust through it; they are just not offered
+    as results. `include_stubs=true` shows them.
+    """
     t0 = time.time()
     per_ctx, loo_raw, seeds = _scores_cached(db, profile, fetch)
     composed = compose(per_ctx, weights)
 
     trusted = {t.work_id for t in db.query(Trust).filter(Trust.profile_id == profile.id)}
+
+    stub_ids: set[str] = set()
+    if not include_stubs:
+        stub_ids = {
+            r[0] for r in db.execute(
+                text("SELECT id FROM works WHERE is_stub = true")).all()
+        }
 
     # leave-one-out replicates are cached as raw per-context scores, so re-composing
     # them under the current weights is pure arithmetic.
@@ -199,7 +216,7 @@ def rank_profile(
     rows: list[tuple[str, float, Uncertainty]] = []
     for node, val in composed.items():
         wid = node_to_work_id(node)
-        if not wid or (exclude_trusted and wid in trusted):
+        if not wid or (exclude_trusted and wid in trusted) or wid in stub_ids:
             continue
         rows.append((wid, val, unc.get(node, Uncertainty(0, 0, 0, 0, "leave_one_out", 1))))
     rows.sort(key=lambda r: -r[1])
