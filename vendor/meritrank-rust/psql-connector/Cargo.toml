@@ -1,0 +1,31 @@
+[package]
+name = "pgmer2"
+version = "0.8.0"
+edition.workspace = true
+
+[[bin]]
+name = "pgrx_embed_pgmer2"
+path = "./src/pgrx_embed.rs"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = ["pg17"]
+shared = []
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
+pg_test = ["csv"]
+
+[dependencies]
+meritrank_service = { path="../service" }
+
+pgrx = "0.17"
+serde = "1.0"
+bincode = "2.0.1"
+
+dotenv = { version = "0.15.0" }
+csv = { version = "1.4", optional = true }
+
+[dev-dependencies]
+pgrx-tests = "=0.17"
+csv = "1.4"

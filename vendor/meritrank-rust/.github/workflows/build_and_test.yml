@@ -1,0 +1,136 @@
+name: Build and test
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: 
+jobs:
+  test_core_oom:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build and run the test
+      run: |
+        export MEM_KB=`/usr/bin/time -f "%M" cargo test -p meritrank_core smoke_memory --release --quiet 2>&1 1>/dev/null`
+        echo "Memory consumption is $MEM_KB KB"
+        if [ $MEM_KB -gt 550000 ]; then
+          exit 1
+        fi
+  test_service:
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build -p meritrank_service
+    - name: Run tests
+      run: cargo test -p meritrank_service --bin meritrank_service
+  test_core:
+    needs: [ test_core_oom, test_service ]
+    if: success()
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build -p meritrank_core
+    - name: Run tests
+      run: cargo test -p meritrank_core -- --skip smoke_memory
+  test_service_oom:
+    needs: [ test_core_oom, test_service ]
+    if: success()
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: cargo build --release -p meritrank_service
+    - name: Run OOM tests with memory usage check
+      run: |
+        export MEM_KB=`/usr/bin/time -f "%M" cargo test -p meritrank_service --release --quiet --bin meritrank_service oom 2>&1 1>/dev/null`
+        echo "Memory consumption is $MEM_KB KB"
+        if [ $MEM_KB -gt 2000000 ]; then
+          exit 1
+        fi
+  test_psql_connector:
+    needs: [ test_core_oom, test_service ]
+    if: success()
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/intersubjective/pgrx-toolchain:pg17-pgrx0.17.0
+    permissions:
+      packages: read
+    env:
+      RUST_BACKTRACE: "1"
+      PGRX_HOME: /root/.pgrx
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the connector
+      run: cargo build -p pgmer2
+    - name: Build the service (release; server is started in Do the tests)
+      run: cargo build --release -p meritrank_service
+    - name: Install sudo and netcat (for cargo pgrx and service port check)
+      run: apk add --no-cache sudo netcat-openbsd
+    - name: Configure passwordless sudo (avoid pgrx 'sudo cp' hanging non-interactively)
+      run: |
+        mkdir -p /etc/sudoers.d
+        echo 'Defaults !requiretty' > /etc/sudoers.d/nopasswd
+        echo 'Defaults env_keep += "MERITRANK_SERVICE_URL"' >> /etc/sudoers.d/nopasswd
+        echo 'root ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers.d/nopasswd
+        chmod 440 /etc/sudoers.d/nopasswd
+    - name: Start meritrank service
+      run: |
+        export MERITRANK_SERVER_PORT=10234 MERITRANK_SERVER_ADDRESS=127.0.0.1 MERITRANK_NUM_WALKS=500
+        nohup ./target/release/meritrank_service >> /tmp/meritrank.log 2>&1 &
+        i=0; while [ $i -lt 30 ]; do nc -z 127.0.0.1 10234 && break; i=$((i+1)); sleep 1; done
+        nc -z 127.0.0.1 10234 || (echo "Meritrank service did not start"; cat /tmp/meritrank.log 2>/dev/null; exit 1)
+    - name: Do the tests
+      working-directory: ./psql-connector
+      run: |
+        export RUST_TEST_THREADS=1
+        export MERITRANK_SERVICE_URL=tcp://127.0.0.1:10234
+        mkdir -p /usr/local/share/postgresql/extension /usr/local/lib/postgresql
+        chmod -R a+rwx /usr/local/share/postgresql/extension /usr/local/lib/postgresql 2>/dev/null || true
+        rm -rf ../target/test-pgdata
+        mkdir -p ../target/test-pgdata
+        chown -R postgres:postgres ../target/test-pgdata
+        unset PG_VERSION
+        nc -z 127.0.0.1 10234 || (echo "Meritrank service died before tests"; cat /tmp/meritrank.log 2>/dev/null; exit 1)
+        cargo pgrx test --runas postgres; r=$?
+        echo "--- meritrank service log ---"
+        cat /tmp/meritrank.log 2>/dev/null || true
+        exit $r
+  test_docker_service:
+    needs: [ test_core_oom, test_service ]
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build docker image
+      run: docker build -f service/Dockerfile .
+  test_docker_psql_connector:
+    needs: [ test_core_oom, test_service ]
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+    steps:
+    - uses: actions/checkout@v4
+    - name: Log in to GHCR
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    - name: Build docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: psql-connector/Dockerfile
+        push: false
+        cache-from: type=gha,scope=psql-connector
+        cache-to: type=gha,mode=max,scope=psql-connector
