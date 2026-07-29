@@ -10,6 +10,23 @@ are already enumerated somewhere: in the bibliographies of their own work. The f
 lets a user upload a PDF of a paper they wrote and seed their trust set from everything it
 cites, at strength 5/5.
 
+### This is not duplicating linkage we already have
+
+Bibliographies of corpus papers are *already* fully materialised — 181,388 citation edges,
+the highest-weighted relation in the graph. The upload path exists because that source has
+two structural holes it cannot fill:
+
+| Hole | Size | What upload does |
+|---|---|---|
+| Full works where OpenAlex returns an **empty** `referenced_works` | **2,079 of 7,211 (29%)** | gives them a bibliography for the first time |
+| Stubs, which have no outgoing references by construction | 89,540 | promotes a leaf to an interior node |
+| Papers not in OpenAlex at all (preprints, unpublished) | unbounded | adds them as `UL…` nodes |
+
+The first of these is the direct cause of the failed Phase 1 Gate 2 (71% against a 90%
+target, ceiling 71.2%), and it is concentrated in books and pre-2000 work — which is also
+where `KNOWN_ISSUES.md` §5 says the corpus is weakest. So this feature is, incidentally,
+the only user-driven mechanism in the product for repairing the corpus.
+
 ## Decisions taken during brainstorming
 
 | Fork | Chosen | Rejected |
@@ -260,8 +277,19 @@ Each fixture gets an expected-parse assertion (entry count and a few known entri
 3. **Recall will be uneven.** Strong on modern DOI-bearing bibliographies, materially worse
    on older, non-DOI, or unusually formatted ones. The failure mode is deliberately
    "N entries need your eyes", never silent mis-trust.
-4. **Self-citations** are detected where author names overlap the uploaded paper's own
-   authors and excluded by default, with a visible count.
+4. **Self-citations are included**, like any other reference. Citing your own prior work
+   is normally you pointing at the thing you most stand behind, so excluding it was
+   over-cautious. They are still *labelled* in the review table so the choice is visible
+   and a user can untick them, but nothing is dropped automatically.
+
+   Note on the justification, because it matters: the argument "MeritRank is sybil
+   tolerant so this is safe" is the one claim this build measured and **could not
+   confirm** — the citation-ring experiment came back at a ratio of 1.00 +/- 0.23, no
+   measurable suppression versus plain personalised PageRank (README, measurements).
+   Including self-citations is still the right call on its own merits, but it should not
+   be justified by a sybil-tolerance property we have not demonstrated. If someone later
+   uploads a large body of heavily self-citing work, nothing in this system is known to
+   discount it.
 
 ## Implementation phasing
 
