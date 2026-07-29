@@ -80,6 +80,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             Base.metadata.create_all(engine)
             log.info("schema ensured")
             _ensure_contexts()
+            # Cold start: `down -v` empties Postgres, and mr-service loses the whole
+            # graph on ANY restart because it holds it in memory. Repair both on a
+            # background thread so /health stays responsive while it runs.
+            from . import bootstrap
+            bootstrap.ensure_started()
     yield
 
 

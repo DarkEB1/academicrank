@@ -1,5 +1,4 @@
 data/cache/
-data/raw/
 .build-logs/
 node_modules/
 __pycache__/

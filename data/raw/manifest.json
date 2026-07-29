@@ -1,0 +1,12 @@
+{
+  "field": "26",
+  "filter": "primary_topic.field.id:fields/26,publication_year:>1989",
+  "target_corpus": 3000,
+  "seed_works": 3000,
+  "promoted_works": 4211,
+  "full_works": 7211,
+  "stub_works": 89540,
+  "snowball_min_referrers": 3,
+  "api_requests": 1910,
+  "cache_hits": 104
+}
