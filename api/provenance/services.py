@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 log = logging.getLogger("provenance.services")
 
-from . import config, ranking, schemas
+from . import config, graphmeta, ranking, schemas
 from .meritrank import MeritRank, Uncertainty
 from .models import (
     Profile, Trust, node_to_work_id, profile_node, work_node,
@@ -317,10 +317,14 @@ _inflight: dict[tuple, threading.Lock] = {}
 
 
 def graph_generation(db: Session) -> int:
-    """Changes whenever scripts/build_graph.py reloads the edge list, which also clears
-    engine state -- so it invalidates every cached score."""
-    return int(db.execute(text("SELECT coalesce(max(id), 0) FROM graph_edges"))
-               .scalar_one())
+    """Persisted graph version (graph_meta.version), bumped by everything that
+    mutates the graph: scripts/build_graph.py and the upload confirm/undo paths.
+
+    Replaces max(graph_edges.id), which had ABA (a TRUNCATE + reload can land on the
+    same max id it started with) and could not see mutations that change weights
+    without adding rows. See graphmeta.py.
+    """
+    return graphmeta.graph_version(db)
 
 
 def trust_signature(db: Session, profile: Profile) -> tuple[str, int]:
@@ -361,13 +365,11 @@ _seen_generation: int | None = None
 
 
 def _check_generation(db: Session, current_profile_id: str) -> int:
-    """Drop every cached score when the graph is rebuilt.
+    """Drop every cached score when the graph version moves.
 
-    `ranking.py` caches raw per-context scores against the trust signature alone, which
-    cannot see a `scripts/build_graph.py` reload -- and a reload calls
-    `mr_bulk_load_edges`, which clears all engine state and invalidates every score in
-    both layers. The persisted edge list is the one thing that changes observably, so
-    it is the generation marker.
+    `ranking._CACHE` now checks (trust signature, graph version) itself, so this is
+    the second of the two layers the spec requires the version to reach. It also
+    clears the global-merit and distance caches, which key on the same counter.
     """
     global _seen_generation
     generation = graph_generation(db)

@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 from sqlalchemy import create_engine, text  # noqa: E402
 
 from provenance import config  # noqa: E402
+from provenance.graphmeta import bump_graph_version  # noqa: E402
 from provenance.meritrank import Edge, MeritRank  # noqa: E402
 from provenance.models import (  # noqa: E402
     author_node, institution_node, topic_node, venue_node, work_node,
@@ -208,8 +209,11 @@ def persist(conn, edges: list[Edge]) -> None:
             [{"src": e.src, "dst": e.dst, "w": e.weight, "ctx": e.context,
               "rel": e.relation} for e in chunk],
         )
+    # Same transaction as the edge rows: every score cache keys on this counter,
+    # so the bump must land atomically with the graph it describes.
+    version = bump_graph_version(conn)
     conn.commit()
-    print(f"  {len(edges)} rows", flush=True)
+    print(f"  {len(edges)} rows (graph_meta.version -> {version})", flush=True)
 
 
 def main() -> int:

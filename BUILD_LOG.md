@@ -360,3 +360,36 @@ not catch it, because the gate rebuilt containers rather than re-cloning the rep
 Fixed by removing the nested `.git` and committing the 99 source files directly.
 Verified by cloning the repository to a scratch directory and building the pgrx
 connector image from that clone alone: exit 0, LF endings intact.
+
+---
+
+# Upload feature build (2026-07-29, second session)
+
+## Phase 0 — alembic wiring + graph_meta version
+
+**15:4x** Required reading done (spec, DECISIONS D1/D1.7/D2/D4/D6, KNOWN_ISSUES 8/14/16,
+api sources, build_graph.py). Stack verified up; `pgmer2` 0.8.0 on :55432.
+
+**15:50** Brief-vs-reality discrepancy found before any code: the brief says the live DB
+is stamped at alembic head; `alembic_version` did not exist. Recorded as DECISIONS D7 —
+startup migration logic stamps legacy schemas at the initial revision, then upgrades.
+
+**15:55** Implemented: `graphmeta.py` (persisted `graph_meta.version`, single-statement
+upsert bump); migration `c9e1a7b4d2f0`; `migrations.py` (stamp-if-legacy + upgrade head,
+ini-less Config so env.py's fileConfig cannot clobber uvicorn logging); lifespan hook runs
+migrations before `create_all`; `services.graph_generation()` now reads the version
+(pool-cache keys already carried it); `ranking._CACHE` entries carry (sig, version);
+`ensure_seeded` gated on (trust signature, graph version) with an empty-scores retry for
+engine restarts (D7.1); `build_graph.py` bumps the version in the same transaction as the
+edge reload.
+
+**16:02** api image rebuilt; migration ran on startup: `alembic_version` =
+`c9e1a7b4d2f0`, `graph_meta` = (1, 1) on the previously-unstamped live DB.
+
+**16:03–16:15** Gate: pytest **40 passed** in 681s — 36 existing + 4 new, of which:
+manual `graph_edges` insert + version bump invalidates another profile's cached ranking
+in BOTH cache layers (pool cache emptied, `ranking._CACHE` entry dropped, generation
+moved N→N+1); gated `ensure_seeded` makes **0** `mr_put_edge` calls when nothing changed
+(<250ms, engine untouched) and re-puts all 6 edges after a version bump.
+
+**16:20–16:35** Gate: full e2e suite **25 passed** (5.2m). Committing Phase 0.

@@ -11,8 +11,8 @@ import re
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, Date, Float, ForeignKey, Index, Integer,
-    SmallInteger, String, Text, UniqueConstraint, func,
+    BigInteger, Boolean, CheckConstraint, Column, Date, Float, ForeignKey, Index,
+    Integer, SmallInteger, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -130,6 +130,19 @@ class Citation(Base):
 # --------------------------------------------------------------------------
 # Derived graph
 # --------------------------------------------------------------------------
+
+class GraphMeta(Base):
+    """Singleton row holding the persisted graph generation counter.
+
+    Bumped on every graph mutation (build_graph.py reload, upload confirm/undo) and
+    mixed into every score-cache key. See graphmeta.py for why max(graph_edges.id)
+    was not good enough.
+    """
+    __tablename__ = "graph_meta"
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    __table_args__ = (CheckConstraint("id = 1", name="ck_graph_meta_singleton"),)
+
 
 class GraphEdge(Base):
     """Materialised edge list.

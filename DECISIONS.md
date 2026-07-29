@@ -278,3 +278,38 @@ Fixed by unioning the promoted works' references into the stub set before hydrat
 This does not move Gate 2 (it does nothing for papers with no reference list at all)
 but it materially increases citation density, which is the strongest signal in the
 graph.
+
+---
+
+## D7. Upload feature, Phase 0: alembic wiring stamps legacy databases first
+
+The implementation brief stated "the live DB is already stamped at head". Verified
+false: `alembic_version` did not exist on the running database (checked 2026-07-29
+before writing any code). Per the brief's own rule, reality wins.
+
+**Decision:** `provenance/migrations.py` (called from the lifespan hook before
+`create_all`) stamps a database at the initial-schema revision `bec852712a4a` when it
+has the schema (`works` exists) but no `alembic_version` table, then runs
+`alembic upgrade head`. A fresh `down -v` database has neither, so it takes the plain
+upgrade path through every migration.
+
+**Rejected:** manually stamping the live DB once from the host and shipping only
+`command.upgrade(cfg, "head")`. It would work for *this* database and break for any
+other pre-existing one (the point of Phase 0 is that column additions must reach
+every live DB, not the one on this machine).
+
+Also deliberate: the alembic `Config` is built without `alembic.ini`, because env.py
+calls `logging.config.fileConfig()` when an ini is present, which would clobber
+uvicorn's logging from inside a startup hook. env.py resolves the database URL itself.
+
+### D7.1 ensure_seeded gating and the engine-restart blind spot
+
+`ranking.ensure_seeded` is now gated on (trust signature, graph_meta.version): zero
+`mr_put_edge` calls when nothing changed, full re-seed when the trust set or graph
+changes. One case the version counter cannot see: an mr-service restart wipes its
+in-memory graph with no Postgres change. Covered by a retry in `_scores_cached` --
+if a profile with seeds reads back an empty score set, the seed marker is dropped,
+the ego re-seeded, and the read retried once (the same pattern `global_scores`
+already used). **Rejected:** probing engine emptiness before every read -- that is a
+per-read engine round-trip to optimise a failure mode that occurs only on container
+restart.

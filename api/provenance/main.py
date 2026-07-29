@@ -77,6 +77,10 @@ def _ensure_contexts() -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if config.AUTOLOAD:
         if _wait_for_db():
+            # Migrations first, create_all second. create_all only creates missing
+            # *tables*; column additions and data migrations only ever happen here.
+            from .migrations import run_migrations
+            run_migrations()
             Base.metadata.create_all(engine)
             log.info("schema ensured")
             _ensure_contexts()

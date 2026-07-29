@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from . import config
+from .graphmeta import graph_version
 from .meritrank import (
     MeritRank, Uncertainty, assign_tie_groups, leave_one_out_uncertainty,
 )
@@ -45,18 +46,50 @@ def _mr(db: Session) -> MeritRank:
 # (D1.5), so one set of trust edges seeds every context at once.
 #
 # mr_bulk_load_edges CLEARS all engine state, so trust edges written earlier do not
-# survive a graph rebuild. ensure_seeded() is therefore idempotent and cheap, and is
-# called before every read.
+# survive a graph rebuild. ensure_seeded() used to re-put every trust edge on every
+# cold read to cover that -- at a measured ~87ms per serialised mr_put_edge, 3.9s of
+# engine time at 45 seeds, paid by everyone queueing behind it. It is now gated on
+# (trust signature, graph version): edges are re-written only when the trust set
+# changed or the graph was rebuilt (build_graph.py bumps graph_meta.version).
+# put_edge is an RPC through the connector, effective immediately regardless of the
+# surrounding Postgres transaction, so recording the seed marker right after the
+# loop is correct even if the caller later rolls back.
 
-def ensure_seeded(db: Session, profile: Profile) -> int:
+_SEEDED: dict[str, tuple[str, int]] = {}
+
+
+def _sig_of_rows(rows: list[Trust]) -> str:
+    return "|".join(sorted(
+        f"{t.work_id}:{t.strength}:{int(t.is_distrust)}" for t in rows))
+
+
+def ensure_seeded(
+    db: Session, profile: Profile,
+    sig: str | None = None, version: int | None = None,
+) -> int:
+    rows = db.query(Trust).filter(Trust.profile_id == profile.id).all()
+    if sig is None:
+        sig = _sig_of_rows(rows)
+    if version is None:
+        version = graph_version(db)
+    n_seeds = len([r for r in rows if not r.is_distrust])
+    if _SEEDED.get(profile.id) == (sig, version):
+        return n_seeds
     mr = _mr(db)
     ego = profile_node(profile.id)
-    rows = db.query(Trust).filter(Trust.profile_id == profile.id).all()
     for t in rows:
         w = (config.DISTRUST_WEIGHT if t.is_distrust
              else config.TRUST_STRENGTH_SCALE.get(t.strength, 0.7))
         mr.put_edge(ego, work_node(t.work_id), w, config.AGGREGATE)
-    return len([r for r in rows if not r.is_distrust])
+    _SEEDED[profile.id] = (sig, version)
+    return n_seeds
+
+
+def forget_seeded(profile_id: str) -> None:
+    """Force the next ensure_seeded to re-write the engine edges. Used when the
+    engine is discovered to have lost state the version counter cannot see (an
+    mr-service restart wipes its in-memory graph without any Postgres change)."""
+    _SEEDED.pop(profile_id, None)
 
 
 def ensure_global_ego(db: Session) -> None:
@@ -141,7 +174,8 @@ def compose(
 # per-context scores are cached per (profile, trust-set) and only the (cheap) weighted
 # composition is redone when the user drags a slider. That also makes the parameter
 # playground genuinely live.
-_CACHE: dict[str, tuple[str, dict[str, dict[str, float]], dict[str, dict[str, float]]]] = {}
+# value: (trust_signature, graph_version, per_context_scores, leave_one_out_scores)
+_CACHE: dict[str, tuple[str, int, dict[str, dict[str, float]], dict[str, dict[str, float]]]] = {}
 _CACHE_MAX = 64
 # Window for leave-one-out replicates (uncertainty), much smaller than the ranking pool.
 LOO_FETCH = 2500
@@ -149,7 +183,7 @@ LOO_FETCH = 2500
 
 def trust_signature(db: Session, profile: Profile) -> str:
     rows = db.query(Trust).filter(Trust.profile_id == profile.id).all()
-    return "|".join(sorted(f"{t.work_id}:{t.strength}:{int(t.is_distrust)}" for t in rows))
+    return _sig_of_rows(rows)
 
 
 def invalidate(profile_id: str) -> None:
@@ -159,15 +193,25 @@ def invalidate(profile_id: str) -> None:
 def _scores_cached(
     db: Session, profile: Profile, fetch: int
 ) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]], int]:
-    """Returns (per_context, leave_one_out, seed_count), cached on the trust set."""
+    """Returns (per_context, leave_one_out, seed_count), cached on
+    (trust set, graph version) -- a graph mutation bumps graph_meta.version and
+    thereby invalidates every profile's cached scores in this layer too."""
     sig = trust_signature(db, profile)
+    version = graph_version(db)
     hit = _CACHE.get(profile.id)
-    if hit and hit[0] == sig:
-        return hit[1], hit[2], len([s for s in sig.split("|") if s and not s.endswith(":1")])
+    if hit and hit[0] == sig and hit[1] == version:
+        return hit[2], hit[3], len([s for s in sig.split("|") if s and not s.endswith(":1")])
 
     mr = _mr(db)
-    seeds = ensure_seeded(db, profile)
+    seeds = ensure_seeded(db, profile, sig=sig, version=version)
     per_ctx = _context_scores(mr, profile_node(profile.id), fetch)
+    # An mr-service restart wipes the in-memory graph without moving the version
+    # counter. If a seeded ego comes back empty, assume lost engine state, force a
+    # re-seed and retry once -- the same pattern services.global_scores uses.
+    if seeds and not any(len(v) > 1 for v in per_ctx.values()):
+        forget_seeded(profile.id)
+        ensure_seeded(db, profile, sig=sig, version=version)
+        per_ctx = _context_scores(mr, profile_node(profile.id), fetch)
     # Leave-one-out costs one mr_scores call per context PER SEED, so it dominates cold
     # start. It only feeds uncertainty on the rows a user actually sees, so it runs on a
     # much smaller window than the ranking pool. At fetch=12000 the full-width version
@@ -176,7 +220,7 @@ def _scores_cached(
     loo = _leave_one_out(db, profile, None, loo_fetch) if 2 <= seeds <= 12 else {}
     if len(_CACHE) >= _CACHE_MAX:
         _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[profile.id] = (sig, per_ctx, loo)
+    _CACHE[profile.id] = (sig, version, per_ctx, loo)
     return per_ctx, loo, seeds
 
 
