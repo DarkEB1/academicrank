@@ -341,3 +341,22 @@ and no horizontal overflow at 1280px.
 | skip link broke navigation under HashRouter | preventDefault + focus `#main` (found by the E2E agent) | regression test 08-keyboard |
 
 Cold 74.5s / warm 50ms, deterministic across repeat calls.
+
+### Post-gate: a defect that would have broken the morning
+
+After the acceptance run passed, `git status` showed `vendor/meritrank-rust` as
+modified but unstageable. It had been recorded as **mode 160000 -- a submodule
+gitlink** -- because the clone kept its own `.git`. Only that single entry was
+tracked, and there was no `.gitmodules`.
+
+So a fresh `git clone` of this repository would have produced an **empty**
+`vendor/meritrank-rust`, `docker compose up --build` would have failed on a missing
+Dockerfile, and the two patches the build depends on -- LF line endings and the
+`20_pgmer2.sh` entrypoint-array fix -- were never committed at all. Everything worked
+only because this working copy happened to have the files on disk. That is precisely
+the "works on a warm machine" failure the final gate exists to catch, and the gate did
+not catch it, because the gate rebuilt containers rather than re-cloning the repo.
+
+Fixed by removing the nested `.git` and committing the 99 source files directly.
+Verified by cloning the repository to a scratch directory and building the pgrx
+connector image from that clone alone: exit 0, LF endings intact.
