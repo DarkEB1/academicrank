@@ -5,31 +5,34 @@ list is deliberately blunt.
 
 ---
 
-## 1. The MeritRank decay parameters are NOT exposed per request — the paper's three decay mechanisms are only partly reachable
+## 1. Of the paper's three decay mechanisms, exactly ONE exists in this build — and it is alpha
 
-This is the most important caveat in the project, because the decay mechanisms are the
-entire reason for choosing MeritRank over personalised PageRank.
+**Corrected 2026-07-30 against the vendored source.** The earlier version of this
+entry said transitivity and connectivity decay were "compiled into `meritrank_core`
+with no runtime surface" and that "we rely on them being active". That was wrong in
+both directions: one of them is fully exposed, and the other two are absent.
 
-What the engine actually exposes, verified against `service/src/settings.rs` and the
-service README:
-
-| Parameter | Exposed how | Per-user? |
+| Paper mechanism | In this build? | Where |
 |---|---|---|
-| `MERITRANK_ALPHA` (walk continuation, 0–1) | service **env var** | No — process-global |
-| `MERITRANK_NUM_WALKS` | service **env var** | No — process-global |
-| `MERITRANK_ZERO_OPINION_FACTOR` | service **env var** | No — process-global |
-| `VSIDS_BUMP` | service **env var** | No — process-global |
-| transitivity / connectivity decay | **not exposed at all** — internal to the core crate | No |
-| epoch decay | **not exposed at all** | No |
+| transitivity decay | **YES — it IS `MERITRANK_ALPHA`** | `core/src/graph.rs:359`: the walk continues with probability α before each step, so a node at distance d contributes ∝ α^d. There is no separate mechanism. |
+| connectivity decay | **NO — absent** | No connectivity/β/κ machinery anywhere in the crate. Walk counters are keyed `(ego, node)` with no per-intermediary counts, so the paper's `T_ij(k)/T_ij` estimator is not even computable from what the engine stores. |
+| epoch decay | **NO — absent** | VSIDS is a different, time-ordered edge-weight mechanism — and it is inert here anyway, because `meritrank.py` pins `magnitude=0` on every edge. |
+
+Note the α inversion when reading the paper: it decays by `(1−α_paper)^d`, the engine
+continues with probability `α_engine`, so `α_engine = 1 − α_paper`. The paper's
+recommended 0.1–0.2 corresponds to the engine's 0.8–0.9 — our `MERITRANK_ALPHA: 0.85`
+is squarely the paper's recommended operating point, not a deviation from it.
 
 Consequences, stated plainly:
 
+- **What this build computes is personalised PageRank with unique-visit-per-walk
+  counting** (`core/src/counter.rs`: each walk contributes at most once per node,
+  which suppresses 2-cycle and hub re-entry mass — a real, load-bearing anti-hub
+  property, and the one genuine behavioural difference from textbook PPR). Claims
+  that this product's ranking benefits from the paper's connectivity or epoch decay
+  are false and must not be made.
 - **There is no per-request or per-user decay knob.** Changing alpha requires
   restarting `mr-service`, and it changes the answer for every user at once.
-- The **transitivity and connectivity decay** described in the paper are compiled into
-  `meritrank_core` with no runtime surface. We cannot tune them, and we cannot show a
-  user what they are set to. We rely on them being active; we cannot demonstrate their
-  values from outside.
 - **Epoch decay in this product is ours, not the paper's.** It is a recency factor
   applied to paper→paper edge weights at graph-construction time
   (`scripts/build_graph.py::epoch_factor`, half-life 60 years, floored at 0.4). It is
@@ -72,9 +75,14 @@ scaled. It answers a different (arguably more useful) question — how much the 
 depends on any single trust decision — but it is **not** a sampling error bar, and it
 will understate pure Monte Carlo noise.
 
-Leave-one-out is only computed for trust sets of size 2–12. Outside that range the API
-falls back to a crude proportional band, which is honest but coarse. Single-seed
-profiles get a deliberately huge band.
+Leave-one-out runs for every trust set of 2 or more seeds. Above 12 seeds it leaves
+out a deterministic, evenly-spaced subsample of 12 seeds rather than every seed in
+turn, with the jackknife inflation still scaled by the true trust-set size. (Fixed
+2026-07-30: previously the API silently fell back to the crude proportional band for
+13+ seeds — i.e. across most of the 10–50 seed range this product targets — while
+still labelling the result `leave_one_out`.) Single-seed profiles get a deliberately
+huge band, now honestly labelled `proportional_fallback`, and the UI copy says it is a
+placeholder rather than a measurement.
 
 ---
 
