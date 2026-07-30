@@ -88,15 +88,26 @@ def build(conn, half_life: float) -> list[Edge]:
     print(f"  {len(cites)} citations -> {len(edges)} edges", flush=True)
 
     # -- authors -------------------------------------------------------------
+    # Degree-1 entities are excluded throughout (R5, measured in the experiments
+    # doc E1/E2): an entity attached to exactly one paper cannot carry trust
+    # BETWEEN papers -- a walk entering it can only bounce back to its source,
+    # which the engine's unique-visit counting then discards. 67.8% of entity
+    # nodes were such pure self-loops, absorbing 36.5% of all entity-hop mass
+    # for zero transmitted signal. They stay in Postgres for display; they are
+    # simply not graph nodes.
     print("Authorship...", flush=True)
     rows = conn.execute(text(
         "SELECT wa.work_id, wa.author_id, a.corpus_degree FROM work_authors wa "
         "JOIN authors a ON a.id = wa.author_id")).all()
+    n_kept = 0
     for wid, aid, deg in rows:
+        if deg <= 1:
+            continue
         an = author_node(aid)
         edges.append(Edge(work_node(wid), an, W["authored_by"], "author", "authored_by"))
         edges.append(Edge(an, work_node(wid), W["wrote"] * damp(deg), "author", "wrote"))
-    print(f"  {len(rows)} authorships", flush=True)
+        n_kept += 1
+    print(f"  {n_kept}/{len(rows)} authorships (degree-1 authors dropped)", flush=True)
 
     # -- topics (IDF-scaled: a niche subfield means far more than "Mathematics") ---
     print("Topics...", flush=True)
@@ -104,34 +115,46 @@ def build(conn, half_life: float) -> list[Edge]:
         "SELECT wt.work_id, wt.topic_id, t.corpus_degree, t.idf FROM work_topics wt "
         "JOIN topics t ON t.id = wt.topic_id")).all()
     max_idf = max([r[3] for r in rows], default=1.0) or 1.0
+    n_kept = 0
     for wid, tid, deg, idf in rows:
+        if deg <= 1:
+            continue
         tn = topic_node(tid)
         scale = (idf or 0.0) / max_idf
         edges.append(Edge(work_node(wid), tn, W["tagged"] * scale, "topic", "tagged"))
         edges.append(Edge(tn, work_node(wid), W["tags"] * scale * damp(deg), "topic", "tags"))
-    print(f"  {len(rows)} topic tags", flush=True)
+        n_kept += 1
+    print(f"  {n_kept}/{len(rows)} topic tags (degree-1 topics dropped)", flush=True)
 
     # -- venues --------------------------------------------------------------
     print("Venues...", flush=True)
     rows = conn.execute(text(
         "SELECT w.id, w.venue_id, v.corpus_degree FROM works w "
         "JOIN venues v ON v.id = w.venue_id WHERE w.venue_id IS NOT NULL")).all()
+    n_kept = 0
     for wid, vid, deg in rows:
+        if deg <= 1:
+            continue
         vn = venue_node(vid)
         edges.append(Edge(work_node(wid), vn, W["published_in"], "venue", "published_in"))
         edges.append(Edge(vn, work_node(wid), W["publishes"] * damp(deg), "venue", "publishes"))
-    print(f"  {len(rows)} venue links", flush=True)
+        n_kept += 1
+    print(f"  {n_kept}/{len(rows)} venue links (degree-1 venues dropped)", flush=True)
 
     # -- institutions (weakest: a shared employer is barely evidence) ---------
     print("Institutions...", flush=True)
     rows = conn.execute(text(
         "SELECT wi.work_id, wi.institution_id, i.corpus_degree FROM work_institutions wi "
         "JOIN institutions i ON i.id = wi.institution_id")).all()
+    n_kept = 0
     for wid, iid, deg in rows:
+        if deg <= 1:
+            continue
         inn = institution_node(iid)
         edges.append(Edge(work_node(wid), inn, W["affiliated"], "institution", "affiliated"))
         edges.append(Edge(inn, work_node(wid), W["hosts"] * damp(deg), "institution", "hosts"))
-    print(f"  {len(rows)} affiliations", flush=True)
+        n_kept += 1
+    print(f"  {n_kept}/{len(rows)} affiliations (degree-1 institutions dropped)", flush=True)
 
     # -- bibliographic coupling ---------------------------------------------
     print("Bibliographic coupling...", flush=True)

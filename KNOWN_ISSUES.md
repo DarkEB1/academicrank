@@ -349,3 +349,18 @@ a fresh `docker compose down -v` and silently fails on every existing database â
 worst possible failure shape. Fix scheduled as stage 0 of the upload feature
 (`docs/superpowers/specs/2026-07-29-own-papers-bibliography-trust-design.md`), but it
 is a defect of the current app independent of that feature.
+
+---
+
+## 16. Degree-1 entities are excluded from the ranking graph
+
+Measured (experiments doc E1/E2): 67.8% of entity nodes -- authors, venues,
+institutions, topics attached to exactly ONE corpus paper -- cannot carry trust
+between papers by construction. A walk entering one can only bounce back to its
+source, and 36.5% of all entity-hop mass was absorbed this way for zero
+transmitted signal. Since 2026-07-30 `build_graph.py` drops them from the graph.
+
+Consequences: they no longer appear in `/explain` paths or the graph explorer
+(they carried no trust, so no path through them was ever load-bearing), but they
+remain in Postgres and still render on paper detail pages. Takes effect at the
+next graph rebuild.

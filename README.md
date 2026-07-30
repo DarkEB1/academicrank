@@ -100,6 +100,11 @@ would produce hundreds of thousands of edges and swamp every walk. Instead the w
 discovers meta-paths (`Paper → Author → Paper` = co-authorship trust) for free, and the
 graph stays sparse.
 
+Measured honestly (see `docs/superpowers/specs/2026-07-29-ranking-experiments-results.md`):
+the whole entity apparatus buys ~2.3 points of held-out recall over citation edges
+alone, and entities attached to a single paper cannot carry trust between papers at
+all — they are excluded from the graph (they remain in the database for display).
+
 | Relation | Weight | Note |
 |---|---|---|
 | `cites` | 1.00 | the deliberate endorsement |
