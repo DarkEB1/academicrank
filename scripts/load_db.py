@@ -407,8 +407,8 @@ DERIVED: list[tuple[str, str]] = [
         UPDATE works w SET
             ref_count = coalesce(o.c, 0),
             in_corpus_cited_by = coalesce(i.c, 0),
-            tsv = to_tsvector('english',
-                              coalesce(w2.title, '') || ' ' || coalesce(w2.abstract, ''))
+            tsv = setweight(to_tsvector('english', coalesce(w2.title, '')), 'A')
+               || setweight(to_tsvector('english', coalesce(w2.abstract, '')), 'B')
         FROM works w2
         LEFT JOIN (SELECT src_id, count(*) AS c FROM citations GROUP BY 1) o
                ON o.src_id = w2.id
