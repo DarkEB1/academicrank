@@ -33,7 +33,8 @@ def assert_scored(item: dict) -> None:
     unc = item["uncertainty"]
     assert UNCERTAINTY_KEYS == set(unc), sorted(UNCERTAINTY_KEYS ^ set(unc))
     assert isinstance(unc["tie_group"], int)
-    assert unc["method"] in ("leave_one_out", "repeat_sample")
+    assert unc["method"] in (
+        "leave_one_out", "repeat_sample", "proportional_fallback")
     assert unc["ci_low"] <= unc["ci_high"]
     assert 0.0 <= item["disagreement"] <= 1.0
 

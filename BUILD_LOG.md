@@ -463,6 +463,59 @@ background warm threads legitimately move by re-seeding trust egos mid-suite (no
 excludes ego-sourced edges; a draft can only add work/entity edges). Final: pytest
 85+2 green after fixes, e2e **25 passed** (3.4m). Committing Phase 2.
 
+## Phase 3a — mr_put_edges + confirm; 3b — undo, visibility, LOO units
+
+**02:40** Rust patch (D10): `WritePutEdges` variant appended to the wire enum, handler =
+N× the existing `process_write_edge` + one sync (byte-identical semantics to N
+mr_put_edge calls, one RPC). Both engine images rebuilt FIRST TRY — the 90-minute
+fallback budget was never touched. Deployment gotcha that cost one cycle: a rebuilt
+connector image does not update an existing pgdata's extension catalog;
+`DROP/CREATE EXTENSION pgmer2` required once (recorded in D10).
+
+**03:30–05:30** Confirm path (Postgres-first), reconcile sweep, undo with survivorship
+flags (migration f3c9e1d7b5a4), visibility filter across rankings/search/
+recommendations/blindspots/subgraph/simulate, leave-one-UPLOAD-out units. Three real
+defects found by execution before the gates went green:
+
+1. **UL trigram identity collision (D11).** Four confirms resolved their "own paper"
+   to the SAME UL local because the titles were ≥0.55 trigram-similar — one user's
+   citations piling onto another user's node. Trigram matching now excludes
+   `source='user_upload'` rows, plus a belt in confirm.
+2. **`node_to_work_id` never matched `UL\d+`** — uploaded locals could not appear in
+   rankings AT ALL, even for their uploader. Regex widened to `^U[WL]\d+$`.
+3. **Cross-process test interference.** A second session running the same test files
+   against the shared stack purged MY confirmed upload mid-rebuild — the survival gate
+   read `{}` and looked like the exact bug it guards against. The upload test modules
+   now hold a Postgres advisory lock, serialising whole modules across processes.
+   (Also two flaky-assertion fixes of mine: engine-count deltas replaced by
+   specific-edge counts — background warms churn totals; and the synthetic-PDF
+   builder now word-wraps — a DOI split across lines cost one match.)
+
+**05:45** Gate 3a, printed by the tests:
+```
+mr_put_edges: 20 edges in 0.06s (3ms/edge vs 87ms serial); batch 20/20 in
+  aggregate AND citation ctx; walks/contexts/other edges untouched
+confirm: 8 refs -> 16 citation + 8 trust edges in 4.1s; weight parity with
+  build_graph.py asserted to 1e-9; graph_meta bumped; source=user_upload
+forced failure between commit and push: engine_pending, 0 engine edges (no
+  scoreable orphan); reconcile_pending repaired 1 -> 16 edges -> confirmed
+FULL REBUILD in 305s: the upload is REGENERATED -- 16 citation edges in
+  graph_edges and the engine (the B4/N6 gate)
+```
+
+**05:50** Gate 3b: undo residue counts ALL ZERO (uploads/references/sources/works/
+citations/graph_edges), 0 upload edges in mr_edgelist(''), hand-added trust rows
+survive (2/2), 22 engine deletes issued; visibility — UL work hidden from a second
+profile and from anonymous search, visible to its uploader, opt-in toggle
+round-trips live; an upload groups as ONE leave-one-out unit (8 trust rows, 1
+upload unit). pdfbib re-verified green after the user's parallel normalize.py DOI
+fix (34 tests).
+
+**05:55** Phase 4 UI landed in parallel (subagent): /#/uploads review flow, trust-set
+upload groups with undo-all, the verbatim display-level-exclusion caveat on /params,
+post-import landing on /recommendations with the dial raised. npm build clean,
+71/71 vitest (9 new).
+
 ## Phase 3a — mr_put_edges engine patch + confirm path
 
 Rust patch (D10): `WritePutEdges` variant appended to ReqData (bincode indices
