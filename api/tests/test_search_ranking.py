@@ -22,8 +22,11 @@ def db():
 
 
 def test_exact_title_lands_first(client, db):
+    # User-uploaded works are excluded: anonymous search hides them by design
+    # (visibility spec), so they can never come back for their own title here.
     rows = db.execute(text(
         "SELECT id, title FROM works WHERE NOT is_stub AND title IS NOT NULL "
+        "AND source != 'user_upload' "
         "AND length(title) BETWEEN 30 AND 120 ORDER BY id LIMIT 20")).all()
     assert len(rows) == 20
     misses = []

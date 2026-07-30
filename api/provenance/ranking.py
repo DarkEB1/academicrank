@@ -154,44 +154,59 @@ def compose(
     per_context: dict[str, dict[str, float]],
     weights: dict[str, float] | None = None,
 ) -> dict[str, float]:
-    """score = baseline + sum_c w_c * (score_c - baseline).
+    """score = weighted MEAN of the per-context scores a node actually has.
 
-    Each named context is 'baseline + one entity family' rather than an isolated
-    family (DECISIONS.md D1.6), so the honest decomposition is the *marginal*
-    contribution of each family over the shared paper-to-paper baseline.
+    Replaced the marginal sum `w_base*b + sum_c w_c*(s_c - b)` on 2026-07-30
+    (v2 plan R4), for two measured reasons -- and explicitly NOT for hubness,
+    which no combiner moves (experiments E5: every one lands at the 86th-87th
+    popularity percentile):
+
+      * **Variance.** Each context's score is an independent Monte Carlo estimate
+        (separate walk sets per subgraph). The marginal sum had variance
+        ~13*sigma^2 against sigma^2/5 for the mean -- most of what it computed in
+        the tail was amplified sampling noise, on scores of 1-5 walk visits.
+      * **Honesty of the tail.** The old max(0, .) clamp collapsed the ~640
+        citation-reachable papers whose noisy marginals summed negative into one
+        indistinguishable block at exactly 0. A mean of non-negative scores needs
+        no clamp, so those papers keep their ordering.
+
+    Contexts a node was never returned in contribute nothing and are excluded
+    from the denominator: "not in this window" is "unknown", not "zero"
+    (same imputation stance as before). A context with no edges of its own is
+    degenerate (the engine returns just the ego) and is skipped entirely.
+
+    Each named context is still 'baseline + one entity family' (DECISIONS.md
+    D1.6); the *displayed* per-context decomposition remains the marginal
+    (`context_breakdown`), which this function no longer computes.
+
+    Zeroing a slider removes that context from the mean, so every slider --
+    including `citation` -- genuinely reorders. We never show a control that
+    does nothing.
     """
     weights = weights or config.DEFAULT_CONTEXT_WEIGHTS
-    base = per_context.get(config.BASELINE_CONTEXT, {})
 
-    # Only contexts that actually carry the baseline are usable. A context with no
-    # edges of its own is degenerate (the engine returns just the ego), and treating
-    # its absent nodes as zero would subtract a full baseline per context and drive
-    # every score negative.
-    active = [c for c in config.ENTITY_CONTEXTS if len(per_context.get(c, {})) > 1]
+    active = [
+        c for c in [config.BASELINE_CONTEXT] + config.ENTITY_CONTEXTS
+        if len(per_context.get(c, {})) > 1 and float(weights.get(c, 1.0)) > 0.0
+    ]
 
-    nodes: set[str] = set(base)
+    nodes: set[str] = set()
     for c in active:
         nodes |= set(per_context.get(c, {}))
 
-    # The baseline carries its own weight. Without this the `citation` slider is inert
-    # -- it is not in ENTITY_CONTEXTS, so nothing ever reads it -- which violates the
-    # rule that we never show a control that does nothing. Scaling the baseline against
-    # the marginals genuinely reorders: it trades "how much do direct citations matter"
-    # against "how much do the entity relations matter".
-    w_base = float((weights or {}).get(config.BASELINE_CONTEXT, 1.0))
-
     out: dict[str, float] = {}
     for n in nodes:
-        b = base.get(n, 0.0)
-        v = w_base * b
+        num = 0.0
+        den = 0.0
         for c in active:
             sc = per_context.get(c, {}).get(n)
             if sc is None:
-                # Not in this context's returned window: we do not know its score.
-                # Impute "no marginal contribution" rather than "score zero".
                 continue
-            v += float(weights.get(c, 1.0)) * (sc - b)
-        out[n] = max(0.0, v)
+            w = float(weights.get(c, 1.0))
+            num += w * sc
+            den += w
+        if den > 0.0:
+            out[n] = num / den
     return out
 
 
