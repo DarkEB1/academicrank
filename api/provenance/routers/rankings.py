@@ -66,6 +66,7 @@ def rankings(
     year_to: Optional[int] = None,
     context: schemas.RankingContext = "aggregate",
     exclude_trusted: bool = True,
+    sort: str = Query(default="trust", pattern="^(trust|lift)$"),
 ) -> schemas.RankingsResponse:
     _check_context(context)
     pool = services.build_pool(db, profile, context=context,
@@ -75,6 +76,21 @@ def rankings(
     keep = services.year_filter(db, [i.work_id for i in items], year_from, year_to)
     if keep is not None:
         items = [i for i in items if i.work_id in keep]
+
+    if sort == "lift":
+        # Re-order the (already filtered) pool by lift and re-bracket ties on the
+        # lift uncertainties -- tie groups are a property of the displayed ordering,
+        # not of the paper. assign_tie_groups writes tie_group into the
+        # lift_uncertainty objects; the result is deterministic for a given pool, so
+        # concurrent requests write the same values.
+        items = sorted(items, key=lambda i: -i.lift)
+        triples = [
+            (i.work_id, i.lift,
+             i.lift_uncertainty if i.lift_uncertainty is not None
+             else Uncertainty(0, 0, 0, 0, "proportional_fallback", 1))
+            for i in items
+        ]
+        assign_tie_groups(triples)
 
     total = len(items)
     page = items[offset:offset + limit]

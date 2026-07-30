@@ -67,6 +67,12 @@ class ScoredPaper(PaperBrief):
     global_merit: float
     rank: int
     disagreement: float
+    # Fame-normalised proximity: log(trust+eps) - lift_gamma*log(background+eps).
+    # A separate displayed field; `trust` keeps its meaning. Optional uncertainty
+    # only on paths that never computed lift (simulate scratch rows) -- the
+    # rankings path always carries one.
+    lift: float = 0.0
+    lift_uncertainty: Optional[Uncertainty] = None
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +96,9 @@ class StoredParams(BaseModel):
     # uploaded edges for everyone; excluding them from your results does not
     # isolate your scores from their existence (KNOWN_ISSUES).
     include_user_uploads: bool = False
+    # Background exponent for the lift field, 0..1. Honoured live (recomposed per
+    # request), so it is a legitimate parameter, unlike alpha/num_walks.
+    lift_gamma: float = 0.5
 
 
 class ProfileCreated(BaseModel):
@@ -114,6 +123,7 @@ class ParamsUpdate(BaseModel):
 
     context_weights: Optional[dict[str, float]] = None
     include_user_uploads: Optional[bool] = None
+    lift_gamma: Optional[float] = None
     alpha: Optional[float] = None
     epoch_half_life_years: Optional[float] = None
     num_walks: Optional[int] = None
@@ -122,6 +132,7 @@ class ParamsUpdate(BaseModel):
 class ParamsResponse(BaseModel):
     context_weights: dict[str, float]
     include_user_uploads: bool = False
+    lift_gamma: float = 0.5
     # Proof the weights are live rather than stored-and-forgotten: the top of the
     # ranking recomputed under the new weights, via ranking.compose().
     preview: list[ScoredPaper] = Field(default_factory=list)

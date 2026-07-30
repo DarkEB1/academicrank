@@ -31,6 +31,26 @@ class RankedItem:
     trust: float
     uncertainty: Uncertainty
     rank: int
+    # Fame-normalised proximity (R3): log(trust+eps) - gamma*log(background+eps).
+    # A separate displayed field, never a redefinition of `trust`.
+    lift: float = 0.0
+    lift_uncertainty: Uncertainty | None = None
+
+
+LIFT_EPS = 1e-9
+
+
+def lift_gamma_of(profile: Profile) -> float:
+    """Per-profile background exponent, 0..1, default 0.5 -- the operating point
+    measured in the experiments (E6): recall holds while the top-25 popularity
+    percentile drops. 0 reproduces the raw trust ordering; 1 is full lift, which
+    measurably over-corrects."""
+    params = profile.params or {}
+    try:
+        v = float(params.get("lift_gamma", 0.5)) if isinstance(params, dict) else 0.5
+    except (TypeError, ValueError):
+        v = 0.5
+    return min(1.0, max(0.0, v))
 
 
 def _mr(db: Session) -> MeritRank:
@@ -308,6 +328,7 @@ def rank_profile(
     exclude_trusted: bool = True,
     fetch: int = 12000,
     include_stubs: bool = False,
+    lift_gamma: float = 0.5,
 ) -> tuple[list[RankedItem], int, int, float]:
     """Returns (items, total, seed_count, elapsed_ms).
 
@@ -348,21 +369,62 @@ def rank_profile(
         for n, v in composed.items()
     }
 
-    rows: list[tuple[str, float, Uncertainty]] = []
+    # --- lift (R3): fame-normalised proximity over the deterministic background.
+    # Lazy import: propagate needs scipy, which the running api image may not carry
+    # until its next rebuild. Missing scipy degrades lift to 0 with a labelled
+    # fallback band rather than taking the app down.
+    bg: dict[str, float] = {}
+    try:
+        from .propagate import PropagationGraph
+        bg = PropagationGraph.get(db).background()
+    except ImportError:  # pragma: no cover - container without scipy
+        import logging
+        logging.getLogger("provenance.ranking").warning(
+            "scipy unavailable; lift degraded to 0 for this request")
+
+    def _lift(wid: str, v: float) -> float:
+        return math.log(v + LIFT_EPS) - lift_gamma * math.log(bg.get(wid, 0.0) + LIFT_EPS)
+
+    lift_unc: dict[str, Uncertainty] = {}
+    if bg and loo:
+        lift_full: dict[str, float] = {}
+        lift_loo: dict[str, dict[str, float]] = {}
+        for node, val in composed.items():
+            w = node_to_work_id(node)
+            if w:
+                lift_full[node] = _lift(w, val)
+        for unit, variant in loo.items():
+            tv: dict[str, float] = {}
+            for node, val in variant.items():
+                w = node_to_work_id(node)
+                if w:
+                    tv[node] = _lift(w, val)
+            lift_loo[unit] = tv
+        # The denominator is profile-independent, so leave-one-out cannot move it:
+        # this band carries numerator uncertainty only (disclosed in the UI copy).
+        lift_unc = leave_one_out_uncertainty(
+            lift_loo, lift_full, n_seeds=seeds, clamp_nonneg=False)
+
+    rows: list[tuple[str, float, Uncertainty, float, Uncertainty]] = []
     for node, val in composed.items():
         wid = node_to_work_id(node)
         if not wid or (exclude_trusted and wid in trusted) or wid in stub_ids:
             continue
+        lv = _lift(wid, val) if bg else 0.0
+        lu = lift_unc.get(node, Uncertainty(
+            abs(lv) * 0.5, lv - abs(lv) * 0.98, lv + abs(lv) * 0.98, 0,
+            "proportional_fallback", max(seeds, 1)))
         # A zero-stderr default would be graded `tight` by the UI -- maximum apparent
         # precision from no information at all. Label it for what it is.
         rows.append((wid, val, unc.get(
-            node, Uncertainty(0, 0, 0, 0, "proportional_fallback", 1))))
+            node, Uncertainty(0, 0, 0, 0, "proportional_fallback", 1)), lv, lu))
     rows.sort(key=lambda r: -r[1])
     assign_tie_groups(rows)
 
     total = len(rows)
     page = rows[offset:offset + limit]
-    items = [RankedItem(wid, val, u, offset + i + 1) for i, (wid, val, u) in enumerate(page)]
+    items = [RankedItem(wid, val, u, offset + i + 1, lift=lv, lift_uncertainty=lu)
+             for i, (wid, val, u, lv, lu) in enumerate(page)]
     return items, total, seeds, (time.time() - t0) * 1000.0
 
 

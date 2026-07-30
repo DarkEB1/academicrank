@@ -20,13 +20,15 @@ COOKIE_MAX_AGE = 365 * 24 * 3600
 
 def _default_params() -> dict:
     return {"context_weights": dict(config.DEFAULT_CONTEXT_WEIGHTS),
-            "include_user_uploads": False}
+            "include_user_uploads": False,
+            "lift_gamma": 0.5}
 
 
 def _stored(profile: Profile) -> schemas.StoredParams:
     return schemas.StoredParams(
         context_weights=services.stored_weights(profile),
         include_user_uploads=ranking.include_user_uploads(profile),
+        lift_gamma=ranking.lift_gamma_of(profile),
     )
 
 
@@ -233,6 +235,19 @@ def set_params(
             weights[k] = fv
 
     new_params = {**(profile.params or {}), "context_weights": weights}
+    if body.lift_gamma is not None:
+        g = float(body.lift_gamma)
+        if not (0.0 <= g <= 1.0):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=[{
+                    "loc": ["body", "lift_gamma"],
+                    "msg": "lift_gamma must be between 0 (raw trust ordering) and "
+                           "1 (full background normalisation).",
+                    "type": "value_error.out_of_range",
+                }],
+            )
+        new_params["lift_gamma"] = g
     if body.include_user_uploads is not None:
         # Display-level exclusion only (the UI carries the caveat verbatim):
         # one shared graph, walks flow through uploaded edges for everyone.
@@ -251,5 +266,6 @@ def set_params(
     return schemas.ParamsResponse(
         context_weights=weights,
         include_user_uploads=ranking.include_user_uploads(profile),
+        lift_gamma=ranking.lift_gamma_of(profile),
         preview=preview,
     )

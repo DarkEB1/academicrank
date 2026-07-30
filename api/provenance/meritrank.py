@@ -235,6 +235,7 @@ def leave_one_out_uncertainty(
     per_seed_scores: dict[str, dict[str, float]],
     full_scores: dict[str, float],
     n_seeds: int | None = None,
+    clamp_nonneg: bool = True,
 ) -> dict[str, Uncertainty]:
     """`per_seed_scores[seed_removed][node] = score`. Returns per-node uncertainty.
 
@@ -257,9 +258,14 @@ def leave_one_out_uncertainty(
             stderr = sd * math.sqrt(max(n - 1, 1))
         else:
             stderr = abs(base) * 0.5  # single seed: the ranking is entirely that seed
+        # clamp_nonneg is the trust-scale convention (a proximity cannot be
+        # negative). It is WRONG for signed scales like lift, where "below
+        # background" is a legitimate value -- clamping would truncate the entire
+        # lower half of the scale and invert some intervals.
+        lo = base - 1.96 * stderr
         out[node] = Uncertainty(
             stderr=stderr,
-            ci_low=max(0.0, base - 1.96 * stderr),
+            ci_low=max(0.0, lo) if clamp_nonneg else lo,
             ci_high=base + 1.96 * stderr,
             tie_group=0,
             method="leave_one_out",
@@ -268,8 +274,12 @@ def leave_one_out_uncertainty(
     return out
 
 
-def assign_tie_groups(ordered: list[tuple[str, float, Uncertainty]]) -> None:
+def assign_tie_groups(ordered: list[tuple]) -> None:
     """Group adjacent items that are not separable given their spread. Mutates in place.
+
+    Rows are tuples whose [1] is the sort value and [2] its Uncertainty; anything
+    after index 2 is carried by the caller and ignored here (rank_profile rows also
+    carry lift and its uncertainty).
 
     Pairwise rather than anchored to the head of the group: leave-one-out spreads on
     small trust sets are large enough that an anchored test collapses the entire
@@ -278,7 +288,8 @@ def assign_tie_groups(ordered: list[tuple[str, float, Uncertainty]]) -> None:
     mean standard error.
     """
     group = 0
-    for i, (_node, value, unc) in enumerate(ordered):
+    for i, row in enumerate(ordered):
+        value, unc = row[1], row[2]
         if i > 0:
             prev_value, prev_unc = ordered[i - 1][1], ordered[i - 1][2]
             tol = (unc.stderr + prev_unc.stderr) / 2.0

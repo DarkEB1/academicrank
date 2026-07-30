@@ -409,6 +409,8 @@ def build_pool(
         # The pool's items are filtered by the visibility toggle, so the flag
         # is part of what determines the pool.
         ranking.include_user_uploads(profile),
+        # lift is baked into the pool's items, so gamma determines the pool too.
+        ranking.lift_gamma_of(profile),
     )
     now = time.time()
     with _pool_lock:
@@ -435,6 +437,7 @@ def build_pool(
                 return ranking.rank_profile(
                     db, profile, limit=POOL_FETCH, offset=0,
                     weights=weights, exclude_trusted=exclude_trusted, fetch=POOL_FETCH,
+                    lift_gamma=ranking.lift_gamma_of(profile),
                 )
 
             items, total, seeds, elapsed = engine_retry(db, _run, "rank_profile")
@@ -500,6 +503,9 @@ def scored_paper(
         global_merit=pool.global_values.get(item.work_id, 0.0),
         rank=rank if rank is not None else item.rank,
         disagreement=disagreement(p_trust, p_global, p_cit),
+        lift=item.lift,
+        lift_uncertainty=(to_uncertainty(item.lift_uncertainty)
+                          if item.lift_uncertainty is not None else None),
     )
 
 
