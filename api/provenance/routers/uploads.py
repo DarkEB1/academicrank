@@ -243,6 +243,49 @@ def patch_reference(
     return _ref_out(ref, briefs)
 
 
+@router.post("/uploads/{upload_id}/confirm",
+             response_model=schemas.UploadConfirmResponse)
+def confirm(
+    upload_id: str, profile: CurrentProfile, db: DbSession,
+) -> schemas.UploadConfirmResponse:
+    """Apply the reviewed draft: Postgres first (works/citations/entity rows/
+    graph_edges/trust+sources in one transaction, graph_meta bumped), then one
+    idempotent mr_put_edges batch to the engine. Engine failure leaves
+    status='engine_pending' -- committed truth intact, repaired by the sweep."""
+    from .. import confirm as confirm_mod
+
+    upload = _owned_upload(db, upload_id, profile.id)
+    try:
+        result = confirm_mod.confirm_upload(db, upload)
+    except confirm_mod.ConfirmError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=str(e)) from e
+    detail = None
+    if result["status"] == "engine_pending":
+        detail = ("Saved. The ranking engine could not be updated right now; "
+                  "it will catch up automatically within a minute or two.")
+    # A confirm changes the trust set: warm the profile like any trust edit.
+    services.schedule_warm(profile.id)
+    return schemas.UploadConfirmResponse(**result, detail=detail)
+
+
+@router.delete("/uploads/{upload_id}", response_model=schemas.UploadUndoResponse)
+def undo(
+    upload_id: str, profile: CurrentProfile, db: DbSession,
+) -> schemas.UploadUndoResponse:
+    """Undo the batch: this upload's trust_sources go; each trust row goes only
+    when no other source survives AND this upload created it (hand-added rows
+    survive); citations/graph_edges the confirm created go; a UL-local paper's
+    works row goes; one batched engine delete pass; version bumped. Engine node
+    NAMES linger in the registry until restart -- harmless, documented litter."""
+    from .. import confirm as confirm_mod
+
+    upload = _owned_upload(db, upload_id, profile.id)
+    result = confirm_mod.undo_upload(db, upload)
+    services.schedule_warm(profile.id)
+    return schemas.UploadUndoResponse(**result)
+
+
 @router.get("/profiles/{profile_id}/uploads",
             response_model=schemas.UploadListResponse)
 def list_uploads(profile: OwnedProfile, db: DbSession) -> schemas.UploadListResponse:

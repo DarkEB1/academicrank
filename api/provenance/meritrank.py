@@ -115,6 +115,31 @@ class MeritRank:
             },
         )
 
+    def put_edges(self, edges: Sequence[Edge], timeout_msec: int = 600_000) -> None:
+        """Non-clearing batch write (our engine patch, DECISIONS D10): mr_put_edge
+        semantics per edge -- U->U replicates into every subgraph, entity edges
+        land in their declared context and the aggregate -- in ONE RPC with one
+        final sync. Unlike mr_bulk_load_edges it never clears walks or contexts,
+        so it is safe outside a full rebuild. Idempotent: re-putting an edge
+        overwrites its weight. magnitude is pinned to 0 (D1.7)."""
+        if not edges:
+            return
+        self.conn.execute(
+            text(
+                "SELECT mr_put_edges("
+                " CAST(:src AS text[]), CAST(:dst AS text[]), CAST(:w AS float8[]),"
+                " CAST(:mag AS bigint[]), CAST(:ctx AS text[]), :t)"
+            ),
+            {
+                "src": [e.src for e in edges],
+                "dst": [e.dst for e in edges],
+                "w": [float(e.weight) for e in edges],
+                "mag": [0] * len(edges),
+                "ctx": [e.context for e in edges],
+                "t": timeout_msec,
+            },
+        )
+
     def put_edge(self, src: str, dst: str, weight: float, context: str = "") -> None:
         self.conn.execute(
             text("SELECT mr_put_edge(:s, :d, :w, :c)"),

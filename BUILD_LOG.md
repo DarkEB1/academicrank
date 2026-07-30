@@ -462,3 +462,46 @@ migration directory), and the zero-writes snapshot counted TOTAL engine edges �
 background warm threads legitimately move by re-seeding trust egos mid-suite (now
 excludes ego-sourced edges; a draft can only add work/entity edges). Final: pytest
 85+2 green after fixes, e2e **25 passed** (3.4m). Committing Phase 2.
+
+## Phase 3a — mr_put_edges engine patch + confirm path
+
+Rust patch (D10): `WritePutEdges` variant appended to ReqData (bincode indices
+untouched), state_manager handler loops the existing `process_write_edge` per edge —
+one RPC, one final sync, none of bulk load's clearing. Both images rebuilt from
+vendored source; `\df` shows `mr_put_edges` on pgmer2 0.8.0. Measured on the live
+549k-edge engine:
+```
+mr_put_edges 100 edges: 0.031s (0.3 ms/edge); mr_put_edge x20: 86.5 ms/edge
+  -> ~283x per edge (and 86.5 measured == the brief's 87ms baseline)
+non-clearing: aggregate 549121 -> 549221 -> 549121 after cleanup, walks kept
+U->U fan-out: +100 in context 'citation'; weight round-trip exact
+```
+
+Confirm path: Postgres-first single transaction (OpenAlex materialisation with
+entity rows, citations with created-flags, graph_edges at build_graph.py parity,
+trust + trust_sources with created_trust survivorship, graph_meta bump), then ONE
+idempotent mr_put_edges batch carrying the profile's trust edges too
+(ranking.mark_seeded stops the next read re-putting them one by one). Failure ->
+engine_pending + 60s reconcile sweep; the CONTAINER's sweep was observed
+autonomously repairing an upload stranded by an earlier failed test run.
+
+Defects found by the gate tests, fixed: ORM Trust adds sat unflushed while raw
+trust_sources INSERTs hit Postgres (FK violation); engine-push scope swept 5,412
+edges for an 8-reference upload (D10.1 — now the paper's node + works this upload
+materialised); the forced-failure test's title '… Review Beta' legitimately
+trigram-resolved to the earlier '… Review Alpha' paper, so both uploads shared one
+own-work — root cause fixed for real by D11 (user_upload works excluded from
+trigram matching).
+
+**Gate (numbers printed by tests/scripts):**
+```
+confirm applied in 3.4s: 8 citations, 16+ graph edges, 8 trust rows;
+  engine weight == graph_edges weight to 1e-9
+forced failure between commit and push: citations committed, ZERO engine edges
+  (no scoreable orphan); reconcile_pending() repaired 1; edge present after
+rebuild survival: scripts/build_graph.py (116s) -> UL4 graph_edges 16 -> 60
+  (cites/cited_by regenerated + 44 coupling/co-citation edges derived from the
+  upload's citations); version 21 -> 23; engine holds UL4->UW2150291618 at
+  0.6085017568352955 == the persisted weight exactly
+4/4 confirm gate tests green
+```

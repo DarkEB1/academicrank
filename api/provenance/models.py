@@ -268,6 +268,10 @@ class UploadReference(Base):
     # OpenAlex was unreachable when this entry needed it: "couldn't check" (our
     # failure), never displayed as "not found" (a claim about the paper).
     couldnt_check: Mapped[bool] = mapped_column(Boolean, default=False)
+    # True when the confirm INSERTED the citations row (vs it already existing:
+    # a corpus paper uploaded by its author may already carry the citation, and
+    # undo must not delete corpus data it did not create).
+    created_citation: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class TrustSource(Base):
@@ -279,6 +283,10 @@ class TrustSource(Base):
     work_id: Mapped[str] = mapped_column(String(24), primary_key=True)
     upload_id: Mapped[str] = mapped_column(
         ForeignKey("uploads.id", ondelete="CASCADE"), primary_key=True, index=True)
+    # True when THIS upload's confirm created the trust row. Undo deletes the
+    # trust row only when no source rows survive AND one of the removed sources
+    # created it -- a hand-added row survives its uploads (spec survivorship).
+    created_trust: Mapped[bool] = mapped_column(Boolean, default=False)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -319,7 +327,7 @@ def venue_node(venue_id: str) -> str:
     return f"BS{venue_id[1:]}" if venue_id.startswith("S") else f"BS{venue_id}"
 
 
-_WORK_NODE_RE = re.compile(r"^UW\d+$")
+_WORK_NODE_RE = re.compile(r"^U[WL]\d+$")
 
 
 def node_to_work_id(node: str) -> str | None:
@@ -329,5 +337,8 @@ def node_to_work_id(node: str) -> str | None:
     the scratch egos used for leave-one-out, simulation and the global-merit
     reference. A loose prefix test lets those leak into rankings as phantom papers
     (the ego scores itself highest, so it lands at rank 1 with no title).
+
+    `UL\\d+` is a user-uploaded local work (work_local_id_seq): a real paper node,
+    subject to the per-profile visibility filter downstream.
     """
     return node[1:] if _WORK_NODE_RE.match(node) else None

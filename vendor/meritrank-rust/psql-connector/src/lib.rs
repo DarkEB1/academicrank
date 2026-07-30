@@ -31,6 +31,7 @@ DROP FUNCTION IF EXISTS mr_delete_node;
 DROP FUNCTION IF EXISTS mr_log_level;
 DROP FUNCTION IF EXISTS mr_sync;
 DROP FUNCTION IF EXISTS mr_bulk_load_edges;
+DROP FUNCTION IF EXISTS mr_put_edges;
 "#,
   name = "bootstrap_raw",
   bootstrap,
@@ -408,6 +409,44 @@ fn mr_bulk_load_edges(
     })
     .collect();
   new_bulk_load_edges(edges, timeout_u64(timeout_msec))
+}
+
+//  PROVENANCE PATCH (D10): non-clearing batch edge write. mr_put_edge
+//  semantics per edge (U->U replicates into every subgraph; entity edges land
+//  in their declared context and the aggregate), ONE RPC round-trip, one sync.
+//  Never clears walks or contexts -- safe outside a full rebuild, unlike
+//  mr_bulk_load_edges.
+#[pg_extern]
+fn mr_put_edges(
+  src_arr: Vec<String>,
+  dst_arr: Vec<String>,
+  weight_arr: Vec<f64>,
+  magnitude_arr: Vec<i64>,
+  context_arr: Vec<String>,
+  timeout_msec: default!(Option<i64>, "600000"),
+) -> Result<&'static str, Box<dyn Error + 'static>> {
+  if src_arr.len() != dst_arr.len()
+    || src_arr.len() != weight_arr.len()
+    || src_arr.len() != magnitude_arr.len()
+    || src_arr.len() != context_arr.len()
+  {
+    return Err("Array length mismatch".into());
+  }
+  let edges: Vec<BulkEdge> = src_arr
+    .into_iter()
+    .zip(dst_arr)
+    .zip(weight_arr)
+    .zip(magnitude_arr)
+    .zip(context_arr)
+    .map(|((((src, dst), amount), mag), context)| BulkEdge {
+      src,
+      dst,
+      amount,
+      magnitude: mag.try_into().unwrap_or(0),
+      context,
+    })
+    .collect();
+  new_put_edges(edges, timeout_u64(timeout_msec))
 }
 
 #[pg_extern]

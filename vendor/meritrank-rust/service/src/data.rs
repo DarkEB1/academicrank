@@ -93,6 +93,14 @@ pub struct OpWriteBulkEdges {
   pub edges: Vec<BulkEdge>,
 }
 
+//  PROVENANCE PATCH (DECISIONS D2.1/D10): non-clearing batch edge write.
+//  Same payload as bulk load; applied with mr_put_edge semantics (no
+//  clear_walks, no subgraphs_map.clear), one RPC, one final sync.
+#[derive(Debug, Clone, Encode, Decode)]
+pub struct OpWritePutEdges {
+  pub edges: Vec<BulkEdge>,
+}
+
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct OpWriteCalculate {
   pub ego: NodeName,
@@ -291,6 +299,10 @@ pub enum ReqData {
   WriteCreateContext,
   WriteNewEdgesFilter(OpWriteNewEdgesFilter),
   WriteFetchNewEdges(OpWriteFetchNewEdges),
+
+  //  PROVENANCE PATCH (D10): appended LAST so existing bincode variant
+  //  indices are untouched.
+  WritePutEdges(OpWritePutEdges),
 }
 
 impl ReqData {

@@ -79,12 +79,17 @@ class ProfileCreate(BaseModel):
 
 
 class StoredParams(BaseModel):
-    """The only per-profile knob the engine actually honours.
+    """The only per-profile knob the engine actually honours, plus the
+    display-level visibility toggle for user-contributed works.
 
     `alpha`, `num_walks` and `epoch_half_life_years` are deliberately absent: see
     API_NOTES.md and the 422 raised by POST /api/profiles/{id}/params.
     """
     context_weights: dict[str, float]
+    # Display-level ONLY: there is one shared graph and walks propagate through
+    # uploaded edges for everyone; excluding them from your results does not
+    # isolate your scores from their existence (KNOWN_ISSUES).
+    include_user_uploads: bool = False
 
 
 class ProfileCreated(BaseModel):
@@ -108,6 +113,7 @@ class ParamsUpdate(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     context_weights: Optional[dict[str, float]] = None
+    include_user_uploads: Optional[bool] = None
     alpha: Optional[float] = None
     epoch_half_life_years: Optional[float] = None
     num_walks: Optional[int] = None
@@ -115,6 +121,7 @@ class ParamsUpdate(BaseModel):
 
 class ParamsResponse(BaseModel):
     context_weights: dict[str, float]
+    include_user_uploads: bool = False
     # Proof the weights are live rather than stored-and-forgotten: the top of the
     # ranking recomputed under the new weights, via ranking.compose().
     preview: list[ScoredPaper] = Field(default_factory=list)
@@ -419,6 +426,27 @@ class UploadReferencePatch(BaseModel):
 class UploadPatch(BaseModel):
     """Edit the upload's own-paper title before confirm."""
     title: Optional[str] = None
+
+
+class UploadUndoResponse(BaseModel):
+    n_edges_removed: int
+    n_trust_removed: int
+    n_engine_deleted: int
+    removed_local_work: bool
+
+
+class UploadConfirmResponse(BaseModel):
+    status: UploadStatus
+    # The uploaded paper's work id (existing corpus id, OpenAlex id fetched at
+    # confirm, or a UL-labelled L... local id).
+    work_id: str
+    n_cited: int
+    n_added: int
+    n_trust: int
+    n_skipped_unavailable: int = 0
+    # engine_pending is not an error: the Postgres truth is committed and the
+    # background sweep (or the next restart) repairs the engine for free.
+    detail: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

@@ -472,6 +472,40 @@ impl MultiGraphProcessor {
         self.loading.store(false, Ordering::SeqCst);
         Response::Ok
       },
+      //  PROVENANCE PATCH (D10): non-clearing batch. Each edge goes through
+      //  process_write_edge -- byte-identical semantics to N mr_put_edge
+      //  calls (U->U fans out to every subgraph; entity edges land in their
+      //  declared context AND the aggregate; illegal kinds are logged and
+      //  skipped) -- but one RPC round-trip and ONE final sync instead of N.
+      //  Deliberately absent: the `loading` gate, subgraphs_map.clear(), and
+      //  clear_walks() -- this op must never destroy engine state.
+      ReqData::WritePutEdges(data) => {
+        self.insert_subgraph_if_does_not_exist(&String::new());
+        for edge in &data.edges {
+          if !edge.context.is_empty() {
+            self.insert_subgraph_if_does_not_exist(&edge.context);
+          }
+        }
+        let mut any_failed = false;
+        for edge in data.edges {
+          let op = OpWriteEdge {
+            src:       edge.src,
+            dst:       edge.dst,
+            amount:    edge.amount,
+            magnitude: edge.magnitude,
+          };
+          let resp = self.process_write_edge(&edge.context, &op).await;
+          if !matches!(resp, Response::Ok) {
+            any_failed = true;
+          }
+        }
+        let stamp = self.next_stamp();
+        self.sync_future(stamp).await;
+        if any_failed {
+          log_error!("WritePutEdges: at least one edge was rejected");
+        }
+        Response::Ok
+      },
       ReqData::WriteCalculate(data) => {
         self
           .send_op(

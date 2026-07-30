@@ -62,8 +62,15 @@ def corpus_work_by_title(
     threshold: float = TITLE_THRESHOLD,
 ) -> tuple[str, float] | None:
     """Best trigram title match above `threshold`, constrained to year +/-1 when
-    a year is supplied. Returns (work_id, similarity)."""
-    clauses = ["title % :t"]
+    a year is supplied. Returns (work_id, similarity).
+
+    user_upload works are EXCLUDED from trigram matching (D11): their titles
+    are user-typed and unvetted, and a similar-titled upload would silently
+    become someone else's "own paper" -- observed live: four different confirms
+    all resolved to the same UL local because their titles were 0.55-similar.
+    DOI/arXiv matching is unaffected (UL locals carry neither).
+    """
+    clauses = ["title % :t", "source <> 'user_upload'"]
     params: dict = {"t": title, "th": str(threshold)}
     if year is not None:
         clauses.append("year BETWEEN :y0 AND :y1")

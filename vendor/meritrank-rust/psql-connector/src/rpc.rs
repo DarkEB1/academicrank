@@ -176,6 +176,22 @@ pub fn new_bulk_load_edges(
   expect_ok(resp)
 }
 
+//  PROVENANCE PATCH (D10): non-clearing batch edge write. Same payload as
+//  bulk load; applied by the service with put_edge semantics -- walks and
+//  named subgraphs survive.
+pub fn new_put_edges(
+  edges: Vec<BulkEdge>,
+  timeout_msec: Option<u64>,
+) -> Result<&'static str, Box<dyn Error + 'static>> {
+  let timeout = timeout_msec.unwrap_or(600_000);
+  let resp = tcp_call(
+    "",
+    ReqData::WritePutEdges(OpWritePutEdges { edges }),
+    Some(timeout),
+  )?;
+  expect_ok(resp)
+}
+
 pub fn new_delete_edge(
   src: &str,
   dst: &str,

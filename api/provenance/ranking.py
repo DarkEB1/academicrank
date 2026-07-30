@@ -92,6 +92,14 @@ def forget_seeded(profile_id: str) -> None:
     _SEEDED.pop(profile_id, None)
 
 
+def mark_seeded(db: Session, profile: Profile) -> None:
+    """Record that the profile's CURRENT trust edges are already in the engine.
+    The upload confirm path writes them itself (inside one mr_put_edges batch,
+    where they cost one RPC instead of ~87ms each); this stops the next read
+    from re-putting every one of them."""
+    _SEEDED[profile.id] = (trust_signature(db, profile), graph_version(db))
+
+
 def ensure_global_ego(db: Session) -> None:
     """Unpersonalised reference point: an ego attached uniformly to the most-cited
     corpus papers. This is our stand-in for 'global merit' -- the engine has no
@@ -196,6 +204,51 @@ def trust_signature(db: Session, profile: Profile) -> str:
     return _sig_of_rows(rows)
 
 
+def include_user_uploads(profile: Profile) -> bool:
+    params = profile.params or {}
+    return bool(params.get("include_user_uploads")) if isinstance(params, dict) else False
+
+
+def hidden_upload_ids(db: Session, profile: Profile) -> set[str]:
+    """UL... local works this profile must not see in results: every
+    user-contributed work except the profile's own, unless the profile opted in
+    via include_user_uploads (default false; spec Visibility)."""
+    if include_user_uploads(profile):
+        return set()
+    rows = db.execute(text(
+        "SELECT w.id FROM works w WHERE w.source = 'user_upload' "
+        "AND NOT EXISTS (SELECT 1 FROM uploads u "
+        "  WHERE u.work_id = w.id AND u.profile_id = :p)"),
+        {"p": profile.id}).all()
+    return {r[0] for r in rows}
+
+
+def trust_units(db: Session, profile: Profile) -> list[tuple[str, list[Trust]]]:
+    """Group the (non-distrust) trust set into leave-one-out units: every
+    hand-added seed is its own unit; ALL seeds sourced from one upload form a
+    single unit (spec B1: a 40-reference upload is one considered decision, not
+    40 -- jackknifing it seed-by-seed would collapse every ranking into one tie
+    group and make LOO cost scale with bibliography size). A work sourced by
+    several uploads joins the lowest upload id; a work both hand-added and
+    upload-sourced counts with the upload (removing the upload removes its
+    influence in the replicate either way).
+    """
+    rows = [t for t in db.query(Trust).filter(
+        Trust.profile_id == profile.id, Trust.is_distrust.is_(False)).all()]
+    rows.sort(key=lambda t: t.work_id)
+    upload_of: dict[str, str] = {}
+    for wid, uid in db.execute(text(
+        "SELECT work_id, min(upload_id) FROM trust_sources "
+        "WHERE profile_id = :p GROUP BY work_id"), {"p": profile.id}).all():
+        upload_of[wid] = uid
+    units: dict[str, list[Trust]] = {}
+    for t in rows:
+        key = (f"upload:{upload_of[t.work_id]}" if t.work_id in upload_of
+               else f"seed:{t.work_id}")
+        units.setdefault(key, []).append(t)
+    return sorted(units.items())
+
+
 def invalidate(profile_id: str) -> None:
     _CACHE.pop(profile_id, None)
 
@@ -203,14 +256,21 @@ def invalidate(profile_id: str) -> None:
 def _scores_cached(
     db: Session, profile: Profile, fetch: int
 ) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]], int]:
-    """Returns (per_context, leave_one_out, seed_count), cached on
+    """Returns (per_context, leave_one_out, considered_decisions), cached on
     (trust set, graph version) -- a graph mutation bumps graph_meta.version and
-    thereby invalidates every profile's cached scores in this layer too."""
+    thereby invalidates every profile's cached scores in this layer too.
+
+    `considered_decisions` counts leave-one-out UNITS, not trust rows: an
+    upload's whole bibliography is one decision (spec B1), so it feeds the
+    cold-start notice and the jackknife n, where seed-counting would overstate
+    both.
+    """
     sig = trust_signature(db, profile)
     version = graph_version(db)
+    units = len(trust_units(db, profile))
     hit = _CACHE.get(profile.id)
     if hit and hit[0] == sig and hit[1] == version:
-        return hit[2], hit[3], len([s for s in sig.split("|") if s and not s.endswith(":1")])
+        return hit[2], hit[3], units
 
     mr = _mr(db)
     seeds = ensure_seeded(db, profile, sig=sig, version=version)
@@ -227,11 +287,11 @@ def _scores_cached(
     # much smaller window than the ranking pool. At fetch=12000 the full-width version
     # pushed a 5-seed cold start past 300s; capped, it is back to ~1 minute.
     loo_fetch = min(fetch, LOO_FETCH)
-    loo = _leave_one_out(db, profile, None, loo_fetch) if seeds >= 2 else {}
+    loo = _leave_one_out(db, profile, None, loo_fetch) if units >= 2 else {}
     if len(_CACHE) >= _CACHE_MAX:
         _CACHE.pop(next(iter(_CACHE)))
     _CACHE[profile.id] = (sig, version, per_ctx, loo)
-    return per_ctx, loo, seeds
+    return per_ctx, loo, units
 
 
 def warm(db: Session, profile: Profile, fetch: int = 12000) -> None:
@@ -271,6 +331,12 @@ def rank_profile(
             r[0] for r in db.execute(
                 text("SELECT id FROM works WHERE is_stub = true")).all()
         }
+    # Display-level exclusion of user-contributed works (spec Visibility):
+    # UL... locals are hidden unless the profile opted in -- except the
+    # uploader's own, which they always see. This is display-level ONLY: the
+    # shared graph still carries the edges and every score is already
+    # perturbed by them (documented in KNOWN_ISSUES, stated in the UI).
+    stub_ids |= hidden_upload_ids(db, profile)
 
     # leave-one-out replicates are cached as raw per-context scores, so re-composing
     # them under the current weights is pure arithmetic.
@@ -303,32 +369,34 @@ def rank_profile(
 def _leave_one_out(
     db: Session, profile: Profile, weights: dict[str, float] | None, fetch: int
 ) -> dict[str, dict[str, dict[str, float]]]:
-    """Re-rank with each seed removed, using a scratch ego so the user's own ego is
-    never mutated.
+    """Re-rank with each UNIT removed (leave-one-upload-out: an upload's whole
+    seed set is one jackknife unit, spec B1), using a scratch ego so the user's
+    own ego is never mutated.
 
-    Returns RAW per-context scores per removed seed (not composed), so the cache can
-    re-compose them under whatever context weights the user later chooses.
+    Returns RAW per-context scores per removed unit (not composed), so the cache
+    can re-compose them under whatever context weights the user later chooses.
 
-    For trust sets larger than LOO_MAX_REPLICATES, a deterministic evenly-spaced
-    subsample of seeds is left out rather than every seed in turn. Evenly spaced over
-    sorted work_id: arbitrary with respect to score (so it does not bias the spread
-    toward strong or weak seeds) but stable across calls, which matters because the
-    result is cached and a wobbling subsample would make the error bars jitter between
-    page views for an unchanged trust set.
+    For unit counts larger than LOO_MAX_REPLICATES, a deterministic evenly-spaced
+    subsample of units is left out rather than every unit in turn. Evenly spaced
+    over the sorted unit labels: arbitrary with respect to score (so it does not
+    bias the spread toward strong or weak seeds) but stable across calls, which
+    matters because the result is cached and a wobbling subsample would make the
+    error bars jitter between page views for an unchanged trust set.
     """
     mr = _mr(db)
-    rows = [t for t in db.query(Trust).filter(
-        Trust.profile_id == profile.id, Trust.is_distrust.is_(False)).all()]
-    rows.sort(key=lambda t: t.work_id)
-    n_seeds = len(rows)
-    if n_seeds > LOO_MAX_REPLICATES:
-        step = n_seeds / LOO_MAX_REPLICATES
-        picks = [rows[min(int(i * step), n_seeds - 1)] for i in range(LOO_MAX_REPLICATES)]
+    units = trust_units(db, profile)
+    rows = [t for _label, members in units for t in members]
+    n_units = len(units)
+    if n_units > LOO_MAX_REPLICATES:
+        step = n_units / LOO_MAX_REPLICATES
+        picks = [units[min(int(i * step), n_units - 1)]
+                 for i in range(LOO_MAX_REPLICATES)]
     else:
-        picks = rows
+        picks = units
     out: dict[str, dict[str, dict[str, float]]] = {}
     scratch = f"Uloo_{profile.id}"
-    for skip in picks:
+    for label, members in picks:
+        skip_ids = {t.work_id for t in members}
         # try/finally, because a client timeout or engine error mid-replicate used to
         # abandon the scratch edges in the engine. They are harmless (nothing uses
         # Uloo_* as an ego) but they accumulate, and a stale scratch ego perturbs
@@ -336,14 +404,14 @@ def _leave_one_out(
         added: list[str] = []
         try:
             for t in rows:
-                if t.work_id == skip.work_id:
+                if t.work_id in skip_ids:
                     continue
                 node = work_node(t.work_id)
                 mr.put_edge(scratch, node,
                             config.TRUST_STRENGTH_SCALE.get(t.strength, 0.7),
                             config.AGGREGATE)
                 added.append(node)
-            out[skip.work_id] = _context_scores(mr, scratch, fetch)
+            out[label] = _context_scores(mr, scratch, fetch)
         finally:
             for node in added:
                 try:

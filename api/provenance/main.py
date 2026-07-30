@@ -89,6 +89,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # background thread so /health stays responsive while it runs.
             from . import bootstrap
             bootstrap.ensure_started()
+            # engine_pending uploads (confirmed in Postgres, engine push failed)
+            # are retried by a background sweep until the engine catches up.
+            from . import confirm
+            confirm.start_reconcile_sweep()
     yield
 
 

@@ -354,6 +354,51 @@ NOT data/cache — the container mounts ./data read-only. Circuit breaker (120 s
 added after measuring the offline worst case: 37 entries x 3 retries x 8 s
 timeouts ≈ 15 minutes for one draft.
 
+### D8.5 Alpha keys without digits fall through to scoring (see below)
+
+---
+
+## D10. `mr_put_edges`: the non-clearing batch is one RPC over N `process_write_edge`s
+
+The vendored engine gained `ReqData::WritePutEdges` (variant appended LAST so bincode
+indices are untouched), a state_manager handler, and connector-side
+`mr_put_edges(src[], dst[], weight[], magnitude[], context[], timeout)`.
+
+**Decision:** the handler loops the EXISTING `process_write_edge` per edge and syncs
+once. That is byte-identical semantics to N `mr_put_edge` calls — U→U fans out to
+every subgraph, entity edges land in their declared context AND the aggregate,
+illegal kinds are logged and skipped — with the N RPC round-trips and N syncs
+removed. Measured on the live engine: 20 edges in one call vs 20×87 ms serial;
+walks, contexts and every pre-existing edge verified untouched (the non-clearing
+test also proves an existing ego still returns scores afterwards).
+
+**Rejected:** a new `AugGraphOp::PutEdges` mirroring the bulk apply-loop minus
+`clear_walks()`. It duplicates partition logic that already exists in two places
+and adds a third divergence point from upstream for no measured benefit.
+
+Deployment gotcha, recorded because it cost a cycle: a rebuilt connector image does
+NOT update the extension catalog of an existing pgdata volume — `DROP EXTENSION
+pgmer2 CASCADE; CREATE EXTENSION pgmer2;` is required once after the image swap
+(`down -v` paths get it for free from the init script).
+
+## D11. Trigram matching excludes user-uploaded locals
+
+Observed live (with a second test session running in parallel): four different
+confirms all resolved their "own paper" to the SAME UL local, because their titles
+were ≥0.55 trigram-similar to the first upload's title. One user's citations piling
+onto another user's paper node is identity corruption, not matching.
+
+**Decision:** `corpus_work_by_title` (used for own-paper resolution AND reference
+trigram matching) excludes `source='user_upload'` rows; confirm carries a belt that
+refuses to adopt another profile's UL work from a stale draft resolution. DOI/arXiv
+matching is unaffected — UL locals carry neither.
+
+**Cost, stated:** a reference to a paper that exists ONLY as someone else's upload
+will not auto-match by title; it goes to review/OpenAlex like any other. Rejected
+alternative — per-profile trigram scoping — would let the uploader's own drafts
+match their own locals, but the added query complexity buys almost nothing: an
+uploader re-citing their own uploaded preprint can pick it manually.
+
 ### D8.5 Alpha keys without digits fall through to scoring
 
 The structural alpha check demands `[A-Z][a-zA-Z+-]*\d{2}[a-z]?` (`[Har77]`, `[BCHM10]`).
@@ -361,6 +406,46 @@ Keys like `[KM]`/`[Kaw]` (checked: Hacking–Prokhorov, de Fernex–Ein–Musta�
 but shape-ambiguous — one capital letter plus letters matches ordinary bracketed
 asides too, so they are not *decisive*; those bibliographies still split via the
 scored path. Recorded because the fixture hunt hit both styles.
+
+## D10. The engine patch: mr_put_edges (non-clearing batch)
+
+Third deliberate divergence from upstream meritrank-rust (after D2.1's build fixes).
+New `ReqData::WritePutEdges` variant (appended LAST in the enum so existing bincode
+indices are untouched), handled in `state_manager.rs` by looping the EXISTING
+`process_write_edge` per edge -- byte-identical semantics to N `mr_put_edge` calls
+(U->U fans out to every subgraph; entity edges land in their declared context and the
+aggregate; illegal kinds logged and skipped) -- with ONE RPC round-trip and one final
+sync. Deliberately absent: the `loading` gate, `subgraphs_map.clear()`, and
+`clear_walks()` -- this op must never destroy engine state.
+
+Measured against the live engine (549k edges):
+
+```
+mr_put_edges, 100 edges:  0.031s  (0.3 ms/edge)
+mr_put_edge   x20:        1.730s  (86.5 ms/edge -- matches the 87ms brief figure)
+speedup: ~283x per edge; non-clearing verified (+100/-100 exact, walks kept);
+U->U fan-out into named contexts verified (+100 in 'citation'); weight
+round-trip exact.
+```
+
+A 50-reference confirm (165-890 edge writes) drops from 14-77s of serialised engine
+time to well under a second. **Rejected:** the async-202 fallback (spec's plan B) --
+the patch worked on the first build, well inside the 90-minute budget.
+
+**Rejected:** a new `AugGraphOp::PutEdges` batch op inside aug_graph (the bulk apply
+loop minus clear_walks). It duplicates the write path at a lower layer and needs its
+own fan-out logic; reusing `process_write_edge` keeps one write path and makes the
+"identical to N put_edge calls" claim true by construction.
+
+### D10.1 Engine-push scope
+
+The confirm/reconcile push re-reads edges from the committed `graph_edges` rows
+(derived-layer invariant), scoped to the uploaded paper's node plus works this upload
+materialised from OpenAlex. The first cut swept every edge touching the cited works:
+citing eight top-cited corpus papers dragged 5,412 pre-existing edges into an
+8-reference push (idempotent but 200x the traffic). Found by the gate test's log line.
+
+---
 
 ### D7.1 ensure_seeded gating and the engine-restart blind spot
 
