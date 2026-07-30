@@ -1,14 +1,28 @@
-# Provenance
+# academicrank (Provenance)
 
 **Given the papers you already trust, how much should you trust this one?**
 
 Provenance answers that question *subjectively* and *per user*. There is no global
-ranking, no impact factor, no h-index. You declare a set of papers you trust, and the
-system runs [MeritRank](https://arxiv.org/html/2207.09950v2) over a heterogeneous graph
-of mathematics literature seeded from your declarations.
+ranking, no impact factor, no h-index. You declare a set of papers you trust — by
+searching, importing a `.bib`, or uploading a PDF of your own paper and seeding from
+its bibliography — and the system runs
+[MeritRank](https://arxiv.org/html/2207.09950v2) (a random-walk trust algorithm, in
+Rust, inside Postgres) over a heterogeneous graph of academic literature: papers,
+authors, venues, topics and institutions as first-class nodes.
 
 The number it gives you is **proximity in a weighted trust graph**. It is not a measure
-of quality, correctness, or importance, and the interface says so in those words.
+of quality, correctness, or importance, and the interface says so in those words. Every
+score ships with an error bar and a tie bracket; every ranking can be *explained* as
+the actual paths from your trust set to the paper; and a **lift** column shows
+proximity relative to how reachable a paper is for everyone, which is what separates
+"close to you" from "famous near everything".
+
+The other thing this repo is: **a record of measuring its own ideas honestly.** The
+design documents under `docs/` include adversarial reviews that killed half the
+original plan, experiments that refuted three of the team's own published diagnoses,
+and a sybil-resistance measurement whose null result is reported as a null result. If
+you want the short version: `KNOWN_ISSUES.md` is ranked by severity and pulls no
+punches.
 
 ---
 
@@ -40,25 +54,65 @@ of quality, correctness, or importance, and the interface says so in those words
 
 ---
 
-## Running it
+## Running it with Claude
+
+The fastest way to get this running is to hand your coding agent the prompt below.
+It encodes every deployment gotcha this stack has, so the agent doesn't have to
+rediscover them. Prerequisites on your machine: **Docker with compose**, ~6GB free
+disk, and patience for one slow first build.
+
+> I've cloned https://github.com/DarkEB1/academicrank and I'm in the repo root.
+> Get the full stack running and verify it works. Facts you need, all verified:
+>
+> - Everything runs in docker compose: `db` (Postgres 17 with the pgmer2 MeritRank
+>   extension, host port **55432**), `mr-service` (Rust ranking engine), `api`
+>   (FastAPI, :8000), `web` (nginx serving the built React app, :5173).
+> - Setup is exactly: `cp .env.example .env` (the OpenAlex key may stay empty — the
+>   committed dataset boots with **no network access**), then
+>   `docker compose up --build -d`. The first build compiles two Rust images and
+>   can take 10+ minutes; that is normal, don't interrupt or restart it.
+> - The compose network needs subnet **172.28.0.0/16** free, and host ports 5173,
+>   8000, 55432, 10234. Port 5432 is deliberately not used: a host-installed
+>   Postgres often squats there and silently shadows the container.
+> - Migrations and the graph bootstrap run at api startup. Healthy means
+>   `curl http://127.0.0.1:8000/api/health` returns `"ok":true` with
+>   `"graph_loaded":true` and ~100k nodes; allow a couple of minutes after the
+>   containers report up.
+> - Open **http://127.0.0.1:5173** — use 127.0.0.1, not localhost: on Windows,
+>   localhost can resolve to ::1 and silently reach some other server.
+> - Expect the **first personalised ranking for any new profile to take 1–3
+>   minutes**: the engine builds that profile's random walks lazily and serialises
+>   requests. Every later read is fast. This is documented behaviour, not a hang.
+> - To see it working: follow `DEMO.md` — build the five-seed trust set it lists
+>   (search returns each paper first), open Rankings, click the **Lift** column
+>   header, and open an Explanation. If the graph page says WebGL was refused,
+>   that's fine — it falls back to a Canvas 2D renderer automatically.
+> - Optional deeper verification: the e2e suite (`cd e2e && npm install &&
+>   npx playwright install chromium && npx playwright test`) runs 29 tests against
+>   the live stack. The API integration suite is `cd api && python -m pytest`
+>   (Python 3.12, `pip install -r api/requirements.txt` plus pytest) and re-warms
+>   cold profiles, so it takes ~15 minutes.
+> - If something misbehaves, read `KNOWN_ISSUES.md` before debugging — the sharp
+>   edges are documented there, ranked by severity.
+
+### Running it by hand
+
+The same thing, compressed:
 
 ```bash
-cp .env.example .env        # add your OpenAlex API key
-docker compose up --build   # builds two Rust images; first build is slow
+cp .env.example .env        # OpenAlex key optional; committed dataset boots offline
+docker compose up --build   # two Rust images; first build is slow
 ```
 
-Then open **http://localhost:5173**. The API is on `:8000` (`/docs` for OpenAPI), the
+Then open **http://127.0.0.1:5173**. The API is on `:8000` (`/docs` for OpenAPI), the
 database on `:55432`, and `mr-service` on `:10234`.
 
-The committed dataset boots without network access. To rebuild the corpus from OpenAlex:
+To rebuild the corpus from OpenAlex instead of the committed snapshot:
 
 ```bash
 python scripts/scrape.py          # disk-cached; a warm cache makes this a no-op
 bash   scripts/rebuild_all.sh     # load -> stats -> build graph -> divergence check
 ```
-
-> **Port note:** the database is published on **55432**, not 5432, because a
-> host-installed PostgreSQL commonly occupies 5432 and silently shadows the container.
 
 ---
 
