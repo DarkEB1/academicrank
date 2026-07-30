@@ -337,6 +337,23 @@ caption; keeping it splices footnote text into whichever entry spans the column 
 (and, when the footnote carries its own `[1]` markers, corrupts the key sequence). A
 real reference line on such a page always has a column.
 
+### D8.6 (Phase 2) The upload tables carry five columns the spec's sketch omits
+
+The spec says "tables exactly per the spec's data model", but its own UI and
+error-handling sections require storage the sketch does not provide: per-entry
+`strength` (the review table's per-row 3/5→5/5 override), `is_self_citation`
+(labelled in review), `couldnt_check` (OpenAlex unreachable must display as our
+failure, never "not found"), and the upload's own editable `title` plus its
+draft-time `resolved_openalex_id`/`resolved_work_id` (works rows only at confirm,
+B6). Where the spec disagrees with itself, the feature requirements win over the
+sketch. **Rejected:** encoding these in a JSONB blob — they are queried and
+patched individually.
+
+Also D9-adjacent: the api-side OpenAlex client caches to the system temp dir,
+NOT data/cache — the container mounts ./data read-only. Circuit breaker (120 s)
+added after measuring the offline worst case: 37 entries x 3 retries x 8 s
+timeouts ≈ 15 minutes for one draft.
+
 ### D8.5 Alpha keys without digits fall through to scoring
 
 The structural alpha check demands `[A-Z][a-zA-Z+-]*\d{2}[a-z]?` (`[Har77]`, `[BCHM10]`).

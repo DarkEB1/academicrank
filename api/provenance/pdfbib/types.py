@@ -65,6 +65,7 @@ class BibResult:
     refusal_reason: str | None = None
     n_pages: int = 0
     heading_text: str | None = None
+    paper_title: str | None = None   # the uploaded paper's own title (editable)
 
     @classmethod
     def refusal(cls, reason: str, n_pages: int = 0) -> "BibResult":
@@ -76,7 +77,7 @@ class BibResult:
             "method": self.method, "confidence": self.confidence,
             "structural": self.structural, "refused": self.refused,
             "refusal_reason": self.refusal_reason, "n_pages": self.n_pages,
-            "heading_text": self.heading_text,
+            "heading_text": self.heading_text, "paper_title": self.paper_title,
         }
 
     @classmethod

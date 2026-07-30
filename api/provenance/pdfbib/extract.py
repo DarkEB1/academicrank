@@ -22,6 +22,38 @@ def layout_lines_for_pdf(pdf_bytes: bytes) -> tuple[list[LayoutLine], int]:
     return lines, n_pages
 
 
+def paper_title_guess(pdf_bytes: bytes) -> str | None:
+    """The uploaded paper's own title: the largest-font text run near the top of
+    page one. A guess -- the review UI makes it editable, which is the actual
+    contract; this only has to be right often enough to save typing."""
+    try:
+        lines = layout_lines(pdf_bytes, [0])
+    except Exception:  # noqa: BLE001 - a title guess must never sink an upload
+        return None
+    if not lines:
+        return None
+    top = [ln for ln in lines if ln.font_size > 0]
+    if not top:
+        return None
+    max_fs = max(ln.font_size for ln in top)
+    titled = [ln for ln in top if ln.font_size >= max_fs - 0.5]
+    # Consecutive max-font lines from the first one form the (possibly wrapped)
+    # title; a stray same-size character elsewhere on the page is ignored.
+    picked: list[str] = []
+    started = False
+    for ln in top:
+        if ln in titled:
+            picked.append(ln.text.strip())
+            started = True
+        elif started:
+            break
+    title = " ".join(picked).strip()
+    if not (10 <= len(title) <= 300):
+        return None
+    from .normalize import normalise
+    return normalise(title)
+
+
 def extract_bibliography(pdf_bytes: bytes) -> BibResult:
     lines, n_pages = layout_lines_for_pdf(pdf_bytes)
 
@@ -50,6 +82,7 @@ def extract_bibliography(pdf_bytes: bytes) -> BibResult:
     result = split_bibliography(bib_lines, body_lines=body_lines)
     result.n_pages = n_pages
     result.heading_text = heading
+    result.paper_title = paper_title_guess(pdf_bytes)
     for e in result.entries:
         parse_fields(e)
     return result

@@ -68,6 +68,9 @@ services:
     environment:
       DATABASE_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/provenance"
       PROVENANCE_AUTOLOAD: "1"
+      # From the repo .env (compose reads it automatically). Empty is fine:
+      # matching degrades to corpus-only and entries read "couldn't check".
+      OPENALEX_API_KEY: "${OPENALEX_API_KEY:-}"
     volumes:
       - ./data:/app/data:ro
       # cold-start bootstrap runs these to repopulate an empty DB / engine

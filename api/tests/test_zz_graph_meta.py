@@ -19,11 +19,23 @@ from provenance.models import Profile
 
 def test_alembic_version_is_stamped_and_at_head():
     """KNOWN_ISSUES §16: alembic never ran. After the fix, the live database must
-    carry alembic_version at the graph_meta revision (the current head)."""
+    carry alembic_version at whatever the CURRENT script head is -- computed from
+    the migration directory, so this test cannot rot as migrations accumulate."""
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config()
+    cfg.set_main_option(
+        "script_location",
+        str(Path(__file__).resolve().parents[1] / "alembic"))
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+
     with SessionLocal() as db:
         rev = db.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert rev == "c9e1a7b4d2f0", (
-        f"alembic_version is {rev!r}; expected the graph_meta head. "
+    assert rev == head, (
+        f"alembic_version is {rev!r}; the migration head is {head!r}. "
         "Did the api container start without running migrations?"
     )
 

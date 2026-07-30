@@ -21,7 +21,7 @@ from . import config
 from .db import engine
 from .meritrank import MeritRank
 from .models import Base
-from .routers import health, imports, papers, profiles, rankings
+from .routers import health, imports, papers, profiles, rankings, uploads
 
 log = logging.getLogger("provenance")
 
@@ -115,3 +115,4 @@ app.include_router(profiles.router)
 app.include_router(papers.router)
 app.include_router(rankings.router)
 app.include_router(imports.router)
+app.include_router(uploads.router)

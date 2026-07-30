@@ -18,7 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field
 # Core types
 # ---------------------------------------------------------------------------
 
-UncertaintyMethod = Literal["leave_one_out", "repeat_sample"]
+UncertaintyMethod = Literal[
+    "leave_one_out", "repeat_sample", "proportional_fallback",
+]
 
 NodeKind = Literal["paper", "author", "topic", "venue", "institution", "profile"]
 
@@ -342,6 +344,81 @@ class GraphEdgeOut(BaseModel):
 class SubgraphResponse(BaseModel):
     nodes: list[GraphNodeOut]
     edges: list[GraphEdgeOut]
+
+
+# ---------------------------------------------------------------------------
+# Uploads (PDF bibliography -> trust seeding)
+# ---------------------------------------------------------------------------
+
+MatchMethod = Literal["doi", "arxiv", "trigram", "openalex", "manual", "none"]
+ReferenceDecision = Literal["pending", "accept", "reject"]
+UploadStatus = Literal["draft", "applying", "engine_pending", "confirmed"]
+
+
+class UploadReferenceOut(BaseModel):
+    idx: int
+    raw: str
+    parsed_title: Optional[str] = None
+    parsed_doi: Optional[str] = None
+    parsed_year: Optional[int] = None
+    match_method: MatchMethod
+    confidence: float
+    decision: ReferenceDecision
+    strength: int
+    is_self_citation: bool
+    # OpenAlex resolution recorded on the draft; a works row exists only after
+    # confirm. The client shows "will be added to the corpus" for these.
+    resolved_openalex_id: Optional[str] = None
+    # Set when the reference matched an EXISTING corpus work.
+    work: Optional[PaperBrief] = None
+    # True when OpenAlex was unreachable for this entry: display "couldn't
+    # check" (our failure), never "not found" (a claim about the paper).
+    couldnt_check: bool = False
+
+
+class UploadOut(BaseModel):
+    id: str
+    filename: Optional[str] = None
+    title: Optional[str] = None
+    status: UploadStatus
+    n_parsed: int
+    n_matched: int
+    n_added: int
+    n_unresolved: int
+    created_at: dt.datetime
+    references: list[UploadReferenceOut] = Field(default_factory=list)
+
+
+class UploadListItem(BaseModel):
+    id: str
+    filename: Optional[str] = None
+    title: Optional[str] = None
+    status: UploadStatus
+    n_parsed: int
+    n_matched: int
+    n_added: int
+    n_unresolved: int
+    created_at: dt.datetime
+
+
+class UploadListResponse(BaseModel):
+    items: list[UploadListItem]
+
+
+class UploadReferencePatch(BaseModel):
+    """Correct/choose/reject one entry in review."""
+    decision: Optional[ReferenceDecision] = None
+    strength: Optional[int] = Field(default=None, ge=1, le=5)
+    # Manual match to a corpus work; clears any OpenAlex resolution.
+    work_id: Optional[str] = None
+    # Corrected fields; a title/year change re-runs matching for this entry.
+    parsed_title: Optional[str] = None
+    parsed_year: Optional[int] = None
+
+
+class UploadPatch(BaseModel):
+    """Edit the upload's own-paper title before confirm."""
+    title: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

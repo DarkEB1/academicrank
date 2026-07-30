@@ -429,3 +429,36 @@ Ground truth counts were established independently (regex over plain extract_tex
 41 pdfbib tests pass (25 named-constant tests, 9 hermetic split/adversarial, 7 slow
 PDF-path). App untouched: no api-image rebuild, so the Phase-0 e2e result stands.
 Committing Phase 1.
+
+## Phase 2 — matching + draft persistence
+
+**01:00–02:00** Migration e7a3c5d9f1b2 (uploads, upload_references, trust_sources,
+works.source, work_local_id_seq — plus five columns the spec's sketch omits but its
+UI/error sections require, D8.6). httpx OpenAlex client (temp-dir cache: ./data is
+mounted read-only in the container; circuit breaker after measuring the offline worst
+case). matching.py owns the precedence and the shared TITLE_THRESHOLD/DOI normaliser;
+imports.py now imports them (one threshold, no drift). Upload router: POST/GET/PATCH
+/api/uploads + per-reference PATCH + per-profile listing. Draft writes rows in the two
+upload tables and NOTHING else.
+
+**02:05** api image rebuilt; the startup alembic (Phase 0's fix) applied the new
+migration to the live DB on boot — the exact failure KNOWN_ISSUES §16 described is
+now structurally impossible.
+
+**02:10** Gate, printed by the tests:
+```
+synthetic PDF citing 8 corpus works by DOI: 8/8 matched method=doi conf=1.0
+  pre-ticked accept; works/citations/graph_edges/trust/engine unchanged
+  (96751, 181388, 549128, 37, 549358)
+real lme4 fixture: 37 parsed -> {doi: 6, trigram: 22, none: 9}; every accept
+  is doi/arxiv, every trigram pending; graph untouched
+dedupe by content_hash -> 409; review PATCHes (reject/promote/manual) work;
+  cross-profile access -> 404; no-bibliography PDF -> 422 with reason
+```
+
+**02:20–02:35** Full-suite rerun caught two test-design flaws of mine, both fixed:
+the zz_graph_meta head assertion hardcoded the Phase-0 revision (now computed from the
+migration directory), and the zero-writes snapshot counted TOTAL engine edges — which
+background warm threads legitimately move by re-seeding trust egos mid-suite (now
+excludes ego-sourced edges; a draft can only add work/entity edges). Final: pytest
+85+2 green after fixes, e2e **25 passed** (3.4m). Committing Phase 2.

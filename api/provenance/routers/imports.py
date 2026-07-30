@@ -15,17 +15,16 @@ from sqlalchemy import text
 
 from .. import schemas, services
 from ..deps import CurrentProfile, DbSession
+# One threshold, one DOI normaliser, shared with the upload matcher: the two
+# import paths must never drift apart on what counts as a safe match.
+from ..matching import TITLE_THRESHOLD, normalise_doi
 from ..models import Trust
 
 router = APIRouter(prefix="/api", tags=["import"])
 
 MAX_BYTES = 4 * 1024 * 1024
-# Above this trigram similarity a title match is safe enough to act on. Tuned high on
-# purpose -- see the module docstring.
-TITLE_THRESHOLD = 0.55
 IMPORT_STRENGTH = 3
 
-_DOI_RE = re.compile(r"10\.\d{4,9}/\S+", re.I)
 _BRACES = re.compile(r"[{}\\]")
 _WS = re.compile(r"\s+")
 
@@ -34,15 +33,6 @@ def _clean(value: str | None) -> str:
     if not value:
         return ""
     return _WS.sub(" ", _BRACES.sub("", value)).strip()
-
-
-def _normalise_doi(value: str | None) -> str | None:
-    if not value:
-        return None
-    m = _DOI_RE.search(value.replace("\\", ""))
-    if not m:
-        return None
-    return m.group(0).rstrip(".,;").lower()
 
 
 def _parse(raw: str) -> list[tuple[str | None, str, str]]:
@@ -72,7 +62,7 @@ def _parse(raw: str) -> list[tuple[str | None, str, str]]:
     out: list[tuple[str | None, str, str]] = []
     for e in entries:
         title = _clean(e.get("title"))
-        doi = _normalise_doi(e.get("doi")) or _normalise_doi(e.get("url"))
+        doi = normalise_doi(e.get("doi")) or normalise_doi(e.get("url"))
         label = title or e.get("ID") or "(untitled entry)"
         out.append((doi, title, label))
     return out

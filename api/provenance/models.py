@@ -11,8 +11,9 @@ import re
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, Column, Date, Float, ForeignKey, Index,
-    Integer, SmallInteger, String, Text, UniqueConstraint, func,
+    BigInteger, Boolean, CheckConstraint, Column, Date, Float, ForeignKey,
+    ForeignKeyConstraint, Index, Integer, SmallInteger, String, Text,
+    UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -48,6 +49,11 @@ class Work(Base):
     in_corpus_cited_by: Mapped[int] = mapped_column(Integer, default=0, index=True)
     raw: Mapped[Optional[dict]] = mapped_column(JSONB)
     tsv: Mapped[Optional[str]] = mapped_column(TSVECTOR)
+    # 'openalex' for corpus records (including works fetched from OpenAlex during
+    # an upload confirm -- those are ordinary corpus rows); 'user_upload' ONLY for
+    # UL... local works that exist solely because a user uploaded them. The
+    # include_user_uploads visibility filter keys on this.
+    source: Mapped[str] = mapped_column(Text, server_default="openalex", default="openalex")
 
     venue = relationship("Venue", lazy="joined")
 
@@ -197,6 +203,90 @@ class ReadMark(Base):
     __tablename__ = "read_marks"
     profile_id: Mapped[str] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), primary_key=True)
     work_id: Mapped[str] = mapped_column(ForeignKey("works.id", ondelete="CASCADE"), primary_key=True)
+
+
+# --------------------------------------------------------------------------
+# Uploads (PDF bibliography -> trust seeding; spec 2026-07-29)
+# --------------------------------------------------------------------------
+
+class Upload(Base):
+    """One uploaded PDF of the user's own paper. A draft holds parsed references
+    only; works/citations/graph rows appear at confirm, never before."""
+    __tablename__ = "uploads"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # uuid hex
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[Optional[str]] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))  # sha256, dedupes re-uploads
+    # The uploaded paper's own title: parsed from the PDF, editable in review.
+    title: Mapped[Optional[str]] = mapped_column(Text)
+    # Draft-time resolution of the paper itself (works row created only at confirm).
+    resolved_openalex_id: Mapped[Optional[str]] = mapped_column(String(24))
+    resolved_work_id: Mapped[Optional[str]] = mapped_column(String(24))
+    work_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("works.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(
+        String(16), default="draft")  # draft | applying | engine_pending | confirmed
+    n_parsed: Mapped[int] = mapped_column(Integer, default=0)
+    n_matched: Mapped[int] = mapped_column(Integer, default=0)
+    n_added: Mapped[int] = mapped_column(Integer, default=0)
+    n_unresolved: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", "content_hash", name="uq_upload_dedupe"),
+    )
+
+
+class UploadReference(Base):
+    """One parsed bibliography entry of an upload, with its match state.
+
+    `resolved_openalex_id` records an OpenAlex resolution WITHOUT creating a works
+    row (spec B6: nothing lands in the corpus before confirm). `work_id` points at
+    an EXISTING corpus work when matching found one.
+    """
+    __tablename__ = "upload_references"
+    upload_id: Mapped[str] = mapped_column(
+        ForeignKey("uploads.id", ondelete="CASCADE"), primary_key=True)
+    idx: Mapped[int] = mapped_column(Integer, primary_key=True)
+    raw: Mapped[str] = mapped_column(Text)
+    parsed_title: Mapped[Optional[str]] = mapped_column(Text)
+    parsed_doi: Mapped[Optional[str]] = mapped_column(Text)
+    parsed_year: Mapped[Optional[int]] = mapped_column(SmallInteger)
+    resolved_openalex_id: Mapped[Optional[str]] = mapped_column(String(24))
+    work_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("works.id", ondelete="SET NULL"))
+    match_method: Mapped[str] = mapped_column(
+        String(16), default="none")  # doi | arxiv | trigram | openalex | manual | none
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    decision: Mapped[str] = mapped_column(
+        String(16), default="pending")  # pending | accept | reject
+    # Per-entry trust strength used at confirm; default 3/5 (spec B1), promotable.
+    strength: Mapped[int] = mapped_column(SmallInteger, default=3)
+    # Labelled, included, tickable like anything else (spec: self-citations).
+    is_self_citation: Mapped[bool] = mapped_column(Boolean, default=False)
+    # OpenAlex was unreachable when this entry needed it: "couldn't check" (our
+    # failure), never displayed as "not found" (a claim about the paper).
+    couldnt_check: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class TrustSource(Base):
+    """Which upload(s) put a work into a profile's trust set. The trust row
+    itself survives until its last source row is gone AND it was not hand-added
+    (survivorship handled in the undo path, Phase 3b)."""
+    __tablename__ = "trust_sources"
+    profile_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    work_id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    upload_id: Mapped[str] = mapped_column(
+        ForeignKey("uploads.id", ondelete="CASCADE"), primary_key=True, index=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["profile_id", "work_id"],
+            ["trust.profile_id", "trust.work_id"],
+            ondelete="CASCADE",
+        ),
+    )
 
 
 # --------------------------------------------------------------------------
