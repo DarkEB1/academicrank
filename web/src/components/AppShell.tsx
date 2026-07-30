@@ -15,6 +15,7 @@ import { Button } from './ui/Button';
 const NAV = [
   { to: '/', label: 'Rankings', end: true },
   { to: '/trust', label: 'Trust set', end: false },
+  { to: '/uploads', label: 'Uploads', end: false },
   { to: '/recommendations', label: 'Recommendations', end: false },
   { to: '/graph', label: 'Graph', end: false },
   { to: '/params', label: 'Parameters', end: false },

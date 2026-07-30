@@ -18,6 +18,13 @@ import type {
   SubgraphResponse,
   TrustListResponse,
   TrustMutationResponse,
+  Upload,
+  UploadConfirmResponse,
+  UploadListResponse,
+  UploadPatch,
+  UploadReference,
+  UploadReferencePatch,
+  UploadUndoResponse,
 } from './types';
 
 /** `/api` in dev (proxied to :8000); override with VITE_API_BASE for other deployments. */
@@ -289,4 +296,42 @@ export const api = {
       body: form,
     });
   },
+
+  // Parsing + matching run synchronously in this request: 10–60 s is normal.
+  createUpload: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<Upload>('/uploads', {
+      method: 'POST',
+      body: form,
+    });
+  },
+
+  upload: (uploadId: string, signal?: AbortSignal) =>
+    request<Upload>(`/uploads/${uploadId}`, { signal }),
+
+  patchUpload: (uploadId: string, body: UploadPatch) =>
+    request<Upload>(`/uploads/${uploadId}`, {
+      method: 'PATCH',
+      body: json(body),
+    }),
+
+  patchUploadReference: (uploadId: string, idx: number, body: UploadReferencePatch) =>
+    request<UploadReference>(`/uploads/${uploadId}/references/${idx}`, {
+      method: 'PATCH',
+      body: json(body),
+    }),
+
+  confirmUpload: (uploadId: string) =>
+    request<UploadConfirmResponse>(`/uploads/${uploadId}/confirm`, {
+      method: 'POST',
+    }),
+
+  undoUpload: (uploadId: string) =>
+    request<UploadUndoResponse>(`/uploads/${uploadId}`, {
+      method: 'DELETE',
+    }),
+
+  listUploads: (profileId: string, signal?: AbortSignal) =>
+    request<UploadListResponse>(`/profiles/${profileId}/uploads`, { signal }),
 };

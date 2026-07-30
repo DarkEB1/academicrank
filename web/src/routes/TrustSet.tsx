@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Check,
+  ChevronDown,
   FileUp,
   Loader2,
   Plus,
@@ -15,10 +16,13 @@ import {
   useSetTrust,
   useSimulate,
   useTrustSet,
+  useUploadDetails,
+  useUploads,
 } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import { useDebounced } from '@/lib/hooks';
-import type { PaperBrief, SimulateResponse, TrustEntry } from '@/lib/types';
+import type { PaperBrief, SimulateResponse, TrustEntry, UploadListItem } from '@/lib/types';
+import { UploadUndoDialog, type UndoTarget } from '@/components/UploadUndoDialog';
 import { formatAuthors, formatCount, formatYear } from '@/lib/format';
 import { PaperTitle } from '@/components/Math';
 import { StrengthPicker, STRENGTH_LABELS } from '@/components/StrengthPicker';
@@ -34,6 +38,13 @@ import { Dialog, DialogHeader } from '@/components/ui/Dialog';
 import { cn } from '@/lib/cn';
 
 const DEFAULT_STRENGTH = 3;
+
+const toUndoTarget = (u: UploadListItem): UndoTarget => ({
+  id: u.id,
+  title: u.title,
+  filename: u.filename,
+  status: u.status,
+});
 
 export function TrustSetScreen(): JSX.Element {
   const { profile } = useSession();
@@ -59,6 +70,45 @@ export function TrustSetScreen(): JSX.Element {
   const distrusted = entries.filter((e) => e.is_distrust);
   const seeds = trusted.length;
   const inSet = new Set(entries.map((e) => e.work.id));
+
+  // Upload-seeded entries are grouped per upload; hand-added stay in the main
+  // list. Attribution needs each upload's accepted work ids, so the details of
+  // every imported upload are fetched alongside the (short) uploads list. The
+  // partition is recomputed per render — the lists involved are small.
+  const uploadsQuery = useUploads(profileId);
+  const importedUploads = useMemo(
+    () => (uploadsQuery.data?.items ?? []).filter((u) => u.status !== 'draft'),
+    [uploadsQuery.data],
+  );
+  const uploadDetails = useUploadDetails(importedUploads.map((u) => u.id));
+
+  const claimed = new Map<string, string>(); // work id -> upload id
+  importedUploads.forEach((u, i) => {
+    const detail = uploadDetails[i]?.data;
+    for (const ref of detail?.references ?? []) {
+      if (ref.decision === 'accept' && ref.work && !claimed.has(ref.work.id)) {
+        claimed.set(ref.work.id, u.id);
+      }
+    }
+  });
+  const byUpload = new Map<string, TrustEntry[]>();
+  const handTrusted: TrustEntry[] = [];
+  for (const entry of trusted) {
+    const uploadId = claimed.get(entry.work.id);
+    if (uploadId === undefined) {
+      handTrusted.push(entry);
+    } else {
+      const list = byUpload.get(uploadId) ?? [];
+      list.push(entry);
+      byUpload.set(uploadId, list);
+    }
+  }
+  const uploadGroups = importedUploads
+    .map((u) => ({ upload: u, entries: byUpload.get(u.id) ?? [] }))
+    .filter((g) => g.entries.length > 0);
+
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [undoTarget, setUndoTarget] = useState<UndoTarget | null>(null);
 
   const add = (paper: PaperBrief, strength: number, isDistrust = false) => {
     setTrust.mutate({ work_id: paper.id, strength, is_distrust: isDistrust });
@@ -212,27 +262,105 @@ export function TrustSetScreen(): JSX.Element {
                   </p>
                 </EmptyState>
               ) : (
-                <ul className="divide-y divide-rule">
-                  {trusted.map((entry) => (
-                    <TrustRow
-                      key={entry.work.id}
-                      entry={entry}
-                      busy={setTrust.isPending}
-                      onStrength={(value) =>
-                        setTrust.mutate({ work_id: entry.work.id, strength: value })
-                      }
-                      onRemove={() => setTrust.mutate({ work_id: entry.work.id, strength: 0 })}
-                      onDistrust={() =>
-                        setTrust.mutate({
-                          work_id: entry.work.id,
-                          strength: entry.strength,
-                          is_distrust: true,
-                        })
-                      }
-                      onPreview={() => runPreview(entry.work, 'remove')}
-                    />
-                  ))}
-                </ul>
+                <>
+                  {handTrusted.length > 0 ? (
+                    <ul className="divide-y divide-rule">
+                      {handTrusted.map((entry) => (
+                        <TrustRow
+                          key={entry.work.id}
+                          entry={entry}
+                          busy={setTrust.isPending}
+                          onStrength={(value) =>
+                            setTrust.mutate({ work_id: entry.work.id, strength: value })
+                          }
+                          onRemove={() => setTrust.mutate({ work_id: entry.work.id, strength: 0 })}
+                          onDistrust={() =>
+                            setTrust.mutate({
+                              work_id: entry.work.id,
+                              strength: entry.strength,
+                              is_distrust: true,
+                            })
+                          }
+                          onPreview={() => runPreview(entry.work, 'remove')}
+                        />
+                      ))}
+                    </ul>
+                  ) : uploadGroups.length > 0 ? (
+                    <p className="px-5 py-4 text-sm text-ink-muted">
+                      Every seed so far came from an upload. Hand-added seeds would be listed
+                      here.
+                    </p>
+                  ) : null}
+
+                  {uploadGroups.map(({ upload, entries: groupEntries }) => {
+                    const open = expandedGroups[upload.id] ?? false;
+                    return (
+                      <section
+                        key={upload.id}
+                        data-testid={`trust-upload-group-${upload.id}`}
+                        className="border-t border-rule"
+                      >
+                        <div className="flex items-center gap-2 px-5 py-3">
+                          <button
+                            type="button"
+                            aria-expanded={open}
+                            onClick={() =>
+                              setExpandedGroups((prev) => ({ ...prev, [upload.id]: !open }))
+                            }
+                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          >
+                            <ChevronDown
+                              aria-hidden
+                              className={cn(
+                                'h-4 w-4 shrink-0 text-ink-faint transition-transform',
+                                !open && '-rotate-90',
+                              )}
+                            />
+                            <span className="truncate text-sm text-ink">
+                              From {upload.title || upload.filename || 'an untitled upload'}
+                            </span>
+                            <span className="shrink-0 font-mono text-2xs tnum text-ink-faint">
+                              ({groupEntries.length})
+                            </span>
+                          </button>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            onClick={() => setUndoTarget(toUndoTarget(upload))}
+                            title="Undo every seed from this upload"
+                          >
+                            Undo all
+                          </Button>
+                        </div>
+                        {open ? (
+                          <ul className="divide-y divide-rule border-t border-rule">
+                            {groupEntries.map((entry) => (
+                              <TrustRow
+                                key={entry.work.id}
+                                entry={entry}
+                                busy={setTrust.isPending}
+                                onStrength={(value) =>
+                                  setTrust.mutate({ work_id: entry.work.id, strength: value })
+                                }
+                                onRemove={() =>
+                                  setTrust.mutate({ work_id: entry.work.id, strength: 0 })
+                                }
+                                onDistrust={() =>
+                                  setTrust.mutate({
+                                    work_id: entry.work.id,
+                                    strength: entry.strength,
+                                    is_distrust: true,
+                                  })
+                                }
+                                onPreview={() => runPreview(entry.work, 'remove')}
+                              />
+                            ))}
+                          </ul>
+                        ) : null}
+                      </section>
+                    );
+                  })}
+                </>
               )}
             </CardBody>
           </Card>
@@ -344,6 +472,12 @@ export function TrustSetScreen(): JSX.Element {
           </>
         ) : null}
       </Dialog>
+
+      <UploadUndoDialog
+        target={undoTarget}
+        profileId={profileId}
+        onClose={() => setUndoTarget(null)}
+      />
     </div>
   );
 }

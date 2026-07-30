@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell';
 import { RankingsScreen } from './routes/Rankings';
 import { TrustSetScreen } from './routes/TrustSet';
 import { RecommendationsScreen } from './routes/Recommendations';
+import { UploadsScreen } from './routes/Uploads';
 import { PaperScreen } from './routes/PaperView';
 import { ParamsScreen } from './routes/Params';
 import { SessionGate } from './routes/SessionGate';
@@ -41,6 +42,14 @@ export function App(): JSX.Element {
           element={
             <SessionGate>
               <TrustSetScreen />
+            </SessionGate>
+          }
+        />
+        <Route
+          path="uploads"
+          element={
+            <SessionGate>
+              <UploadsScreen />
             </SessionGate>
           }
         />

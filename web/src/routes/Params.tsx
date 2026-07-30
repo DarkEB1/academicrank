@@ -5,6 +5,7 @@ import { useRankings, useSeedCount, useSetParams } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import { useDebounced } from '@/lib/hooks';
 import { ApiError } from '@/lib/api';
+import { INCLUDE_UPLOADS_CAVEAT } from '@/lib/uploads';
 import type { Params, ScoredPaper } from '@/lib/types';
 import { domainFor, formatMillis, formatSignedRank } from '@/lib/format';
 import { PaperTitle } from '@/components/Math';
@@ -296,6 +297,11 @@ export function ParamsScreen(): JSX.Element {
             </Card>
           ) : null}
 
+          <IncludeUploadsToggle
+            profileId={profileId}
+            initial={serverParams.include_user_uploads === true}
+          />
+
           <div className="flex items-center gap-3 text-xs text-ink-muted">
             {setParams.isPending ? <span>Saving parameters…</span> : null}
             {setParams.isSuccess && !setParams.isPending ? <span>Parameters saved.</span> : null}
@@ -413,5 +419,58 @@ export function ParamsScreen(): JSX.Element {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The include_user_uploads visibility toggle. Its own mutation instance so its
+ * save state does not blur into the debounced weight/scalar writes above.
+ */
+function IncludeUploadsToggle({
+  profileId,
+  initial,
+}: {
+  profileId: string;
+  initial: boolean;
+}): JSX.Element {
+  const setParams = useSetParams(profileId);
+  const [on, setOn] = useState(initial);
+
+  const toggle = (checked: boolean) => {
+    setOn(checked);
+    setParams.mutate(
+      { include_user_uploads: checked },
+      { onError: () => setOn(!checked) },
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader
+        title="Papers uploaded by other users"
+        description="Works that exist only because another user uploaded them are labelled, and hidden from your results by default. Your own uploads are always visible to you."
+      />
+      <CardBody className="space-y-3">
+        <label className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            data-testid="params-include-uploads-toggle"
+            checked={on}
+            disabled={setParams.isPending}
+            onChange={(e) => toggle(e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-accent disabled:cursor-not-allowed"
+          />
+          <span className="text-sm text-ink">Include papers uploaded by other users</span>
+        </label>
+        {/* Spec-mandated wording, verbatim. Do not soften it. */}
+        <p className="max-w-measure text-xs leading-relaxed text-ink-muted">
+          {INCLUDE_UPLOADS_CAVEAT}
+        </p>
+        {setParams.isError &&
+        !(setParams.error instanceof ApiError && setParams.error.status === 422) ? (
+          <ErrorState error={setParams.error} />
+        ) : null}
+      </CardBody>
+    </Card>
   );
 }

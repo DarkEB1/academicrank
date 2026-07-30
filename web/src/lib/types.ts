@@ -83,6 +83,12 @@ export type Params = {
   alpha?: number;
   epoch_half_life_years?: number;
   num_walks?: number;
+  /**
+   * Display-level only: one shared graph, walks propagate through uploaded
+   * edges for everyone. Excluding uploads hides them; it does not isolate
+   * your scores from their existence.
+   */
+  include_user_uploads?: boolean;
 } & Record<string, unknown>;
 
 export type ProfileCreated = {
@@ -324,6 +330,87 @@ export type BibtexImportResponse = {
   matched: PaperBrief[];
   unmatched: string[];
   added: number;
+};
+
+/* ------------------------------------------------------------------ */
+/* Uploads (PDF bibliography -> trust seeding)                         */
+/* ------------------------------------------------------------------ */
+
+export type MatchMethod = 'doi' | 'arxiv' | 'trigram' | 'openalex' | 'manual' | 'none';
+export type ReferenceDecision = 'pending' | 'accept' | 'reject';
+export type UploadStatus = 'draft' | 'applying' | 'engine_pending' | 'confirmed';
+
+export type UploadReference = {
+  idx: number;
+  raw: string;
+  parsed_title: string | null;
+  parsed_doi: string | null;
+  parsed_year: number | null;
+  match_method: MatchMethod;
+  confidence: number;
+  decision: ReferenceDecision;
+  strength: number;
+  is_self_citation: boolean;
+  /** OpenAlex resolution on the draft; a works row exists only after confirm. */
+  resolved_openalex_id: string | null;
+  /** Set when the reference matched an EXISTING corpus work. */
+  work: PaperBrief | null;
+  /**
+   * True when OpenAlex was unreachable for this entry: display "couldn't
+   * check" (our failure), never "not found" (a claim about the paper).
+   */
+  couldnt_check: boolean;
+};
+
+export type Upload = {
+  id: string;
+  filename: string | null;
+  title: string | null;
+  status: UploadStatus;
+  n_parsed: number;
+  n_matched: number;
+  n_added: number;
+  n_unresolved: number;
+  created_at: string;
+  references: UploadReference[];
+};
+
+export type UploadListItem = Omit<Upload, 'references'>;
+
+export type UploadListResponse = {
+  items: UploadListItem[];
+};
+
+export type UploadReferencePatch = {
+  decision?: ReferenceDecision;
+  strength?: number;
+  /** Manual match to a corpus work; the server treats it as the tick. */
+  work_id?: string;
+  /** A title/year change re-runs matching for this entry server-side. */
+  parsed_title?: string;
+  parsed_year?: number;
+};
+
+export type UploadPatch = {
+  title?: string | null;
+};
+
+export type UploadUndoResponse = {
+  n_edges_removed: number;
+  n_trust_removed: number;
+  n_engine_deleted: number;
+  removed_local_work: boolean;
+};
+
+export type UploadConfirmResponse = {
+  status: UploadStatus;
+  work_id: string;
+  n_cited: number;
+  n_added: number;
+  n_trust: number;
+  n_skipped_unavailable: number;
+  /** engine_pending only: not an error, the engine catches up automatically. */
+  detail: string | null;
 };
 
 /* ------------------------------------------------------------------ */

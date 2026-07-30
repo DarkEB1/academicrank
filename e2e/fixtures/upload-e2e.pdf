@@ -1,0 +1,62 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 255 >>
+stream
+BT /F1 18.0 Tf 50 720.0 Td (Playwright Upload Odyssey Nonpareil Treatise) Tj ET
+BT /F1 11.0 Tf 50 690.0 Td (A. Uploader and B. Colleague) Tj ET
+BT /F1 10.0 Tf 50 660.0 Td (Abstract. This synthetic paper exists to exercise the upload draft pipeline.) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 1890 >>
+stream
+BT /F1 14.0 Tf 50 740.0 Td (References) Tj ET
+BT /F1 10.0 Tf 50 712.0 Td ([1] A. Author and B. Author, The central role of the propensity score in observational) Tj ET
+BT /F1 10.0 Tf 50 698.0 Td (    studies for causal effects, Journal of Examples 1 \(1983\) 101-110.) Tj ET
+BT /F1 10.0 Tf 50 684.0 Td (    doi:10.1093/biomet/70.1.41) Tj ET
+BT /F1 10.0 Tf 50 666.0 Td ([2] A. Author and B. Author, Statistical Analysis With Missing Data, Journal of Examples 2) Tj ET
+BT /F1 10.0 Tf 50 652.0 Td (    \(1989\) 101-110. doi:10.2307/2289883) Tj ET
+BT /F1 10.0 Tf 50 634.0 Td ([3] A. Author and B. Author, Estimating causal effects of treatments in randomized and) Tj ET
+BT /F1 10.0 Tf 50 620.0 Td (    nonrandomized studies., Journal of Examples 3 \(1974\) 101-110. doi:10.1037/h0037350) Tj ET
+BT /F1 10.0 Tf 50 602.0 Td ([4] A. Author and B. Author, Inference and missing data, Journal of Examples 4 \(1976\)) Tj ET
+BT /F1 10.0 Tf 50 588.0 Td (    101-110. doi:10.1093/biomet/63.3.581) Tj ET
+BT /F1 10.0 Tf 50 570.0 Td ([5] A. Author and B. Author, Multiple Imputation for Nonresponse in Surveys, Journal of) Tj ET
+BT /F1 10.0 Tf 50 556.0 Td (    Examples 5 \(1987\) 101-110. doi:10.1002/9780470316696) Tj ET
+BT /F1 10.0 Tf 50 538.0 Td ([6] A. Author and B. Author, Maximum Likelihood from Incomplete Data Via the <i>EM</i>) Tj ET
+BT /F1 10.0 Tf 50 524.0 Td (    Algorithm, Journal of Examples 6 \(1977\) 101-110. doi:10.1111/j.2517-6161.1977.tb01600.x) Tj ET
+BT /F1 10.0 Tf 50 506.0 Td ([7] A. Author and B. Author, Generalized Linear Models, Journal of Examples 7 \(2005\)) Tj ET
+BT /F1 10.0 Tf 50 492.0 Td (    101-110. doi:10.1007/0-387-27255-0_9) Tj ET
+BT /F1 10.0 Tf 50 474.0 Td ([8] A. Author and B. Author, Bayesian Inference for Causal Effects: The Role of) Tj ET
+BT /F1 10.0 Tf 50 460.0 Td (    Randomization, Journal of Examples 8 \(1978\) 101-110. doi:10.1214/aos/1176344064) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 8
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000000553 00000 n 
+0000000679 00000 n 
+0000002621 00000 n 
+trailer
+<< /Size 8 /Root 1 0 R >>
+startxref
+2691
+%%EOF

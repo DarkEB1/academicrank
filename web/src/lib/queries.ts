@@ -1,5 +1,6 @@
 import {
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
   type UseMutationResult,
@@ -23,6 +24,13 @@ import type {
   SubgraphResponse,
   TrustListResponse,
   TrustMutationResponse,
+  Upload,
+  UploadConfirmResponse,
+  UploadListResponse,
+  UploadPatch,
+  UploadReference,
+  UploadReferencePatch,
+  UploadUndoResponse,
 } from './types';
 
 export const keys = {
@@ -39,6 +47,8 @@ export const keys = {
   diversity: (p: string) => ['diversity', p] as const,
   subgraph: (p: string, focus: string | undefined, limit: number, ctx: Context) =>
     ['subgraph', p, focus ?? null, limit, ctx] as const,
+  uploads: (p: string) => ['uploads', p] as const,
+  upload: (id: string) => ['upload', id] as const,
 };
 
 /**
@@ -238,6 +248,133 @@ export function useImportBibtex(
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: keys.trust(profileId) });
       void qc.invalidateQueries({ queryKey: ['rankings'] });
+      void qc.invalidateQueries({ queryKey: keys.me });
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Uploads                                                             */
+/* ------------------------------------------------------------------ */
+
+export function useUploads(profileId: string): UseQueryResult<UploadListResponse> {
+  return useQuery({
+    queryKey: keys.uploads(profileId),
+    queryFn: ({ signal }) => api.listUploads(profileId, signal),
+    staleTime: 10_000,
+  });
+}
+
+export function useUpload(uploadId: string | null): UseQueryResult<Upload> {
+  return useQuery({
+    queryKey: keys.upload(uploadId ?? ''),
+    queryFn: ({ signal }) => api.upload(uploadId as string, signal),
+    enabled: Boolean(uploadId),
+    staleTime: 10_000,
+  });
+}
+
+/**
+ * One detail query per upload, so the trust screen can attribute trust rows to
+ * the upload that seeded them. The list is small (a user's own uploads).
+ */
+export function useUploadDetails(uploadIds: string[]): UseQueryResult<Upload>[] {
+  return useQueries({
+    queries: uploadIds.map((id) => ({
+      queryKey: keys.upload(id),
+      queryFn: ({ signal }: { signal?: AbortSignal }) => api.upload(id, signal),
+      staleTime: 10_000,
+    })),
+  });
+}
+
+export function useCreateUpload(
+  profileId: string,
+): UseMutationResult<Upload, Error, File> {
+  const qc = useQueryClient();
+  return useMutation({
+    // No retry: the POST parses and matches synchronously (10–60 s) and a
+    // duplicate retry would just 409 against the content hash.
+    retry: false,
+    mutationFn: (file: File) => api.createUpload(file),
+    onSuccess: (upload) => {
+      qc.setQueryData(keys.upload(upload.id), upload);
+      void qc.invalidateQueries({ queryKey: keys.uploads(profileId) });
+    },
+  });
+}
+
+export function usePatchUpload(
+  uploadId: string,
+): UseMutationResult<Upload, Error, UploadPatch> {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: UploadPatch) => api.patchUpload(uploadId, body),
+    onSuccess: (upload) => {
+      qc.setQueryData(keys.upload(upload.id), upload);
+      void qc.invalidateQueries({ queryKey: ['uploads'] });
+    },
+  });
+}
+
+export function usePatchUploadReference(
+  uploadId: string,
+): UseMutationResult<UploadReference, Error, { idx: number; body: UploadReferencePatch }> {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ idx, body }) => api.patchUploadReference(uploadId, idx, body),
+    onSuccess: (ref) => {
+      qc.setQueryData<Upload>(keys.upload(uploadId), (prev) =>
+        prev
+          ? {
+              ...prev,
+              references: prev.references.map((r) => (r.idx === ref.idx ? ref : r)),
+            }
+          : prev,
+      );
+    },
+  });
+}
+
+export function useConfirmUpload(
+  profileId: string,
+): UseMutationResult<UploadConfirmResponse, Error, string> {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (uploadId: string) => api.confirmUpload(uploadId),
+    onSuccess: (_data, uploadId) => {
+      // A confirm is a bulk trust edit: everything downstream of the trust
+      // set is stale, exactly as in useSetTrust.
+      void qc.invalidateQueries({ queryKey: keys.upload(uploadId) });
+      void qc.invalidateQueries({ queryKey: keys.uploads(profileId) });
+      void qc.invalidateQueries({ queryKey: keys.trust(profileId) });
+      void qc.invalidateQueries({ queryKey: ['rankings'] });
+      void qc.invalidateQueries({ queryKey: ['recommendations'] });
+      void qc.invalidateQueries({ queryKey: ['blindspots'] });
+      void qc.invalidateQueries({ queryKey: ['diversity'] });
+      void qc.invalidateQueries({ queryKey: ['explain'] });
+      void qc.invalidateQueries({ queryKey: ['paper'] });
+      void qc.invalidateQueries({ queryKey: keys.me });
+    },
+  });
+}
+
+export function useUndoUpload(
+  profileId: string,
+): UseMutationResult<UploadUndoResponse, Error, string> {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (uploadId: string) => api.undoUpload(uploadId),
+    onSuccess: (_data, uploadId) => {
+      qc.removeQueries({ queryKey: keys.upload(uploadId) });
+      void qc.invalidateQueries({ queryKey: keys.uploads(profileId) });
+      void qc.invalidateQueries({ queryKey: keys.trust(profileId) });
+      void qc.invalidateQueries({ queryKey: ['rankings'] });
+      void qc.invalidateQueries({ queryKey: ['recommendations'] });
+      void qc.invalidateQueries({ queryKey: ['blindspots'] });
+      void qc.invalidateQueries({ queryKey: ['diversity'] });
+      void qc.invalidateQueries({ queryKey: ['explain'] });
+      void qc.invalidateQueries({ queryKey: ['paper'] });
       void qc.invalidateQueries({ queryKey: keys.me });
     },
   });

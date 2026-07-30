@@ -5,6 +5,7 @@ import {
   BookMarked,
   Compass,
   CornerDownLeft,
+  FileUp,
   ListOrdered,
   Loader2,
   Network,
@@ -68,6 +69,13 @@ export function CommandPalette({
         hint: 'Add, weight and remove seed papers',
         icon: <BookMarked aria-hidden className="h-4 w-4" />,
         run: go('/trust'),
+      },
+      {
+        id: 'nav-uploads',
+        label: 'Uploads',
+        hint: 'Seed your trust set from a paper you wrote',
+        icon: <FileUp aria-hidden className="h-4 w-4" />,
+        run: go('/uploads'),
       },
       {
         id: 'nav-recs',

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useRecommendations, useSeedCount } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import { useDebounced } from '@/lib/hooks';
@@ -14,7 +14,7 @@ import {
 import { domainFor, formatAuthors, formatCount, formatYear } from '@/lib/format';
 import { MathText, PaperTitle } from '@/components/Math';
 import { ScoreBar } from '@/components/ScoreBar';
-import { CoverageNote, Disclaimer } from '@/components/Honesty';
+import { CoverageNote, Disclaimer, Notice } from '@/components/Honesty';
 import { ErrorState, NoTrustSetYet } from '@/components/States';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Slider } from '@/components/ui/Slider';
@@ -23,10 +23,21 @@ import { LoadingRegion, Skeleton } from '@/components/ui/Skeleton';
 import { groupTies } from '@/lib/ties';
 import { cn } from '@/lib/cn';
 
+/** Router state set by the Uploads screen after a successful import. */
+type PostImportState = {
+  upload?: {
+    n_trust: number;
+    n_added: number;
+    status: string;
+    detail: string | null;
+  };
+};
+
 export function RecommendationsScreen(): JSX.Element {
   const { profile } = useSession();
   const profileId = profile?.id ?? '';
   const [params, setParams] = useSearchParams();
+  const fromUpload = (useLocation().state as PostImportState | null)?.upload;
 
   const initial = quantizeDiversity(Number(params.get('diversity') ?? 0.35));
   const [diversity, setDiversity] = useState(initial);
@@ -59,6 +70,17 @@ export function RecommendationsScreen(): JSX.Element {
           gives you both.
         </p>
       </header>
+
+      {fromUpload ? (
+        <Notice tone="neutral" title={`${fromUpload.n_trust} seeds imported from your paper`} icon={false}>
+          <p>
+            The dial starts raised: straight rankings right after an upload mostly return the
+            references of your references, which you already have. Exploration is where the new
+            seeds earn their keep.
+          </p>
+          {fromUpload.detail ? <p className="mt-1.5">{fromUpload.detail}</p> : null}
+        </Notice>
+      ) : null}
 
       <Card>
         <CardHeader
