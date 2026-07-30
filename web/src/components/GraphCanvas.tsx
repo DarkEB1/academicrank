@@ -3,6 +3,15 @@ import Graph from 'graphology';
 import { circular } from 'graphology-layout';
 import forceAtlas2 from 'graphology-layout-forceatlas2';
 import Sigma from 'sigma';
+import { Canvas2DGraphRenderer } from './graph2d';
+
+/** The three methods this component actually consumes from a renderer; both
+ * Sigma and Canvas2DGraphRenderer satisfy it structurally. */
+type GraphRendererLike = {
+  on(event: 'clickNode' | 'enterNode' | 'leaveNode', handler: (p: { node: string }) => void): unknown;
+  refresh(): void;
+  kill(): void;
+};
 import type { SubgraphEdge, SubgraphNode } from '@/lib/types';
 import {
   KIND_SIZE,
@@ -36,17 +45,19 @@ export function GraphCanvas({
   className,
 }: GraphCanvasProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
-  const rendererRef = useRef<Sigma | null>(null);
+  const rendererRef = useRef<GraphRendererLike | null>(null);
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
 
   const [settling, setSettling] = useState(false);
   const [webglFailed, setWebglFailed] = useState(false);
+  const [canvas2d, setCanvas2d] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     setWebglFailed(false);
+    setCanvas2d(false);
 
     const graph = new Graph({ multi: true, type: 'directed' });
     const extent = trustExtent(nodes);
@@ -92,21 +103,33 @@ export function GraphCanvas({
     circular.assign(graph, { scale: 100 });
 
     // Sigma needs a WebGL context and throws mid-construction when the browser
-    // refuses one (Firefox with hardware acceleration off or fingerprinting
-    // resistance on surfaces it as `TypeError: ... "blendFunc", u is null`).
-    // The canvas is a progressive enhancement over the keyboard-accessible node
-    // list below it, so a missing context degrades to a message -- it must not
-    // take the whole route down through the error boundary.
-    let renderer: Sigma;
+    // refuses one (LibreWolf ships webgl.disabled=true; Firefox surfaces it as
+    // `TypeError: ... "blendFunc", u is null`). Nothing about a node-budgeted
+    // subgraph needs WebGL, so the ladder is: sigma -> Canvas2DGraphRenderer
+    // (same graph, same layout loop, pan/zoom/click/hover) -> a plain message.
+    // Only the last rung loses function, and none of them may take the route
+    // down through the error boundary.
+    // Dev switch: localStorage['pv:graph-renderer'] = '2d' forces the fallback.
+    let renderer: GraphRendererLike;
+    const force2d =
+      typeof window !== 'undefined' &&
+      window.localStorage?.getItem('pv:graph-renderer') === '2d';
     try {
+      if (force2d) throw new Error('2d renderer forced via pv:graph-renderer');
       renderer = createRenderer();
     } catch (err) {
-      console.warn('Graph canvas disabled: WebGL unavailable.', err);
-      graph.clear();
-      setWebglFailed(true);
-      return () => {
-        /* nothing rendered */
-      };
+      try {
+        renderer = new Canvas2DGraphRenderer(graph, container);
+        setCanvas2d(true);
+        if (!force2d) console.warn('WebGL unavailable; using Canvas 2D graph renderer.', err);
+      } catch (err2d) {
+        console.warn('Graph canvas disabled: no WebGL and no 2D context.', err2d);
+        graph.clear();
+        setWebglFailed(true);
+        return () => {
+          /* nothing rendered */
+        };
+      }
     }
 
     function createRenderer(): Sigma {
@@ -202,6 +225,15 @@ export function GraphCanvas({
           className="pointer-events-none absolute bottom-3 left-3 rounded-sm border border-rule bg-surface/90 px-2 py-1 font-mono text-2xs text-ink-muted"
         >
           settling layout…
+        </p>
+      ) : null}
+      {canvas2d ? (
+        <p
+          role="status"
+          className="pointer-events-none absolute bottom-3 right-3 rounded-sm border border-rule bg-surface/90 px-2 py-1 font-mono text-2xs text-ink-muted"
+          title="This browser refused a WebGL context, so the graph is drawn with the simpler Canvas 2D renderer: same data and layout, fewer labels."
+        >
+          canvas 2D renderer (no WebGL)
         </p>
       ) : null}
       {webglFailed ? (
