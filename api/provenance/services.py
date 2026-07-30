@@ -468,7 +468,14 @@ def to_uncertainty(u: Uncertainty) -> schemas.Uncertainty:
         ci_low=u.ci_low,
         ci_high=u.ci_high,
         tie_group=u.tie_group,
-        method="leave_one_out" if u.method == "leave_one_out" else "repeat_sample",
+        # Pass the method through rather than coercing unknown values to
+        # "repeat_sample". The old expression turned every non-LOO method into a claim
+        # that the walk was rerun and its spread measured, which the engine cannot do
+        # (KNOWN_ISSUES #3) -- so the one honest value was being relabelled as the one
+        # impossible one.
+        method=u.method if u.method in (
+            "leave_one_out", "repeat_sample", "proportional_fallback",
+        ) else "proportional_fallback",
         n_samples=u.n_samples,
     )
 

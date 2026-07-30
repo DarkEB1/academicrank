@@ -180,6 +180,16 @@ _CACHE_MAX = 64
 # Window for leave-one-out replicates (uncertainty), much smaller than the ranking pool.
 LOO_FETCH = 2500
 
+# Leave-one-out costs one mr_scores call per context PER REPLICATE, so the number of
+# REPLICATES is what has to be bounded -- not the size of the trust set. The previous
+# rule (`2 <= seeds <= 12`) bounded the trust set instead, which meant every profile
+# with 13 or more seeds silently fell through to the crude proportional band. That band
+# is `stderr = |v| * 0.5`, i.e. relative uncertainty of exactly 0.5, which the UI grades
+# `uninformative` and which collapses the whole page into one tie group -- across the
+# ENTIRE 10-50 seed range this product is built for. Bounding replicates instead keeps
+# a real jackknife at every trust-set size for the same worst-case cost.
+LOO_MAX_REPLICATES = 12
+
 
 def trust_signature(db: Session, profile: Profile) -> str:
     rows = db.query(Trust).filter(Trust.profile_id == profile.id).all()
@@ -217,7 +227,7 @@ def _scores_cached(
     # much smaller window than the ranking pool. At fetch=12000 the full-width version
     # pushed a 5-seed cold start past 300s; capped, it is back to ~1 minute.
     loo_fetch = min(fetch, LOO_FETCH)
-    loo = _leave_one_out(db, profile, None, loo_fetch) if 2 <= seeds <= 12 else {}
+    loo = _leave_one_out(db, profile, None, loo_fetch) if seeds >= 2 else {}
     if len(_CACHE) >= _CACHE_MAX:
         _CACHE.pop(next(iter(_CACHE)))
     _CACHE[profile.id] = (sig, version, per_ctx, loo)
@@ -266,8 +276,9 @@ def rank_profile(
     # them under the current weights is pure arithmetic.
     loo = {seed: compose(per_ctx_variant, weights)
            for seed, per_ctx_variant in loo_raw.items()}
-    unc = leave_one_out_uncertainty(loo, composed) if loo else {
-        n: Uncertainty(abs(v) * 0.5, max(0.0, v * 0.5), v * 1.5, 0, "leave_one_out", max(seeds, 1))
+    unc = leave_one_out_uncertainty(loo, composed, n_seeds=seeds) if loo else {
+        n: Uncertainty(abs(v) * 0.5, max(0.0, v * 0.5), v * 1.5, 0,
+                       "proportional_fallback", max(seeds, 1))
         for n, v in composed.items()
     }
 
@@ -276,7 +287,10 @@ def rank_profile(
         wid = node_to_work_id(node)
         if not wid or (exclude_trusted and wid in trusted) or wid in stub_ids:
             continue
-        rows.append((wid, val, unc.get(node, Uncertainty(0, 0, 0, 0, "leave_one_out", 1))))
+        # A zero-stderr default would be graded `tight` by the UI -- maximum apparent
+        # precision from no information at all. Label it for what it is.
+        rows.append((wid, val, unc.get(
+            node, Uncertainty(0, 0, 0, 0, "proportional_fallback", 1))))
     rows.sort(key=lambda r: -r[1])
     assign_tie_groups(rows)
 
@@ -290,18 +304,31 @@ def _leave_one_out(
     db: Session, profile: Profile, weights: dict[str, float] | None, fetch: int
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Re-rank with each seed removed, using a scratch ego so the user's own ego is
-    never mutated. Bounded to trust sets of 12 or fewer -- beyond that the cost is not
-    worth it and the spread is small anyway.
+    never mutated.
 
     Returns RAW per-context scores per removed seed (not composed), so the cache can
     re-compose them under whatever context weights the user later chooses.
+
+    For trust sets larger than LOO_MAX_REPLICATES, a deterministic evenly-spaced
+    subsample of seeds is left out rather than every seed in turn. Evenly spaced over
+    sorted work_id: arbitrary with respect to score (so it does not bias the spread
+    toward strong or weak seeds) but stable across calls, which matters because the
+    result is cached and a wobbling subsample would make the error bars jitter between
+    page views for an unchanged trust set.
     """
     mr = _mr(db)
     rows = [t for t in db.query(Trust).filter(
         Trust.profile_id == profile.id, Trust.is_distrust.is_(False)).all()]
+    rows.sort(key=lambda t: t.work_id)
+    n_seeds = len(rows)
+    if n_seeds > LOO_MAX_REPLICATES:
+        step = n_seeds / LOO_MAX_REPLICATES
+        picks = [rows[min(int(i * step), n_seeds - 1)] for i in range(LOO_MAX_REPLICATES)]
+    else:
+        picks = rows
     out: dict[str, dict[str, dict[str, float]]] = {}
     scratch = f"Uloo_{profile.id}"
-    for skip in rows:
+    for skip in picks:
         # try/finally, because a client timeout or engine error mid-replicate used to
         # abandon the scratch edges in the engine. They are harmless (nothing uses
         # Uloo_* as an ego) but they accumulate, and a stale scratch ego perturbs

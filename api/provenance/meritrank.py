@@ -209,14 +209,24 @@ class MeritRank:
 def leave_one_out_uncertainty(
     per_seed_scores: dict[str, dict[str, float]],
     full_scores: dict[str, float],
+    n_seeds: int | None = None,
 ) -> dict[str, Uncertainty]:
-    """`per_seed_scores[seed_removed][node] = score`. Returns per-node uncertainty."""
+    """`per_seed_scores[seed_removed][node] = score`. Returns per-node uncertainty.
+
+    `n_seeds` is the true size of the trust set, which may exceed the number of
+    replicates when they have been subsampled (see ranking.LOO_MAX_REPLICATES). The
+    jackknife inflation factor depends on the trust-set size, not on how many
+    delete-one replicates we could afford to draw: each replicate estimates the same
+    per-seed spread either way. Defaults to the replicate count, which is correct when
+    every seed was left out in turn.
+    """
     out: dict[str, Uncertainty] = {}
     variants = list(per_seed_scores.values())
-    n = len(variants)
+    m = len(variants)
+    n = n_seeds if n_seeds is not None else m
     for node, base in full_scores.items():
         samples = [v.get(node, 0.0) for v in variants]
-        if n >= 2:
+        if m >= 2:
             sd = statistics.pstdev(samples)
             # jackknife scaling: LOO replicates understate spread by ~sqrt(n-1)
             stderr = sd * math.sqrt(max(n - 1, 1))
@@ -228,7 +238,7 @@ def leave_one_out_uncertainty(
             ci_high=base + 1.96 * stderr,
             tie_group=0,
             method="leave_one_out",
-            n_samples=max(n, 1),
+            n_samples=max(m, 1),
         )
     return out
 

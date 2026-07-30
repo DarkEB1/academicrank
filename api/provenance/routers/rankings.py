@@ -223,7 +223,7 @@ def blindspots(
         item = by_id.get(wid)
         trust_val = item.trust if item else 0.0
         unc = item.uncertainty if item else Uncertainty(
-            0.0, 0.0, 0.0, 0, "leave_one_out", max(pool.seeds, 1))
+            0.0, 0.0, 0.0, 0, "proportional_fallback", max(pool.seeds, 1))
         rows.append((gap, wid, trust_val, unc))
 
     rows.sort(key=lambda r: -r[0])
@@ -482,7 +482,7 @@ def _score_scratch(
         unc = leave_one_out_uncertainty(loo, composed)
     else:
         unc = {n: Uncertainty(abs(v) * 0.5, max(0.0, v * 0.5), v * 1.5, 0,
-                              "leave_one_out", max(len(positives), 1))
+                              "proportional_fallback", max(len(positives), 1))
                for n, v in composed.items()}
     return composed, unc
 
@@ -541,7 +541,7 @@ def simulate(
             # comparable: no seeds of the hypothetical set, and no stubs.
             if wid and wid not in seeds and wid not in stubs:
                 out.append((wid, val, unc.get(
-                    node, Uncertainty(0, 0, 0, 0, "leave_one_out", 1))))
+                    node, Uncertainty(0, 0, 0, 0, "proportional_fallback", 1))))
         out.sort(key=lambda r: -r[1])
         assign_tie_groups(out)
         return out

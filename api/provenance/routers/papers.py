@@ -109,7 +109,7 @@ def paper_detail(pid: str, profile: OwnedProfile, db: DbSession) -> schemas.Pape
         db.commit()
         unc = schemas.Uncertainty(
             stderr=abs(trust) * 0.5, ci_low=max(0.0, trust * 0.5), ci_high=trust * 1.5,
-            tie_group=0, method="leave_one_out", n_samples=max(pool.seeds, 1),
+            tie_group=0, method="proportional_fallback", n_samples=max(pool.seeds, 1),
         )
 
     global_merit = pool.global_values.get(pid)
@@ -234,7 +234,7 @@ def explain(pid: str, profile: OwnedProfile, db: DbSession) -> schemas.ExplainRe
         trust=trust,
         uncertainty=schemas.Uncertainty(
             stderr=abs(trust) * 0.5, ci_low=max(0.0, trust * 0.5), ci_high=trust * 1.5,
-            tie_group=0, method="leave_one_out", n_samples=max(seeds, 1),
+            tie_group=0, method="proportional_fallback", n_samples=max(seeds, 1),
         ),
         paths=paths,
         by_context=[schemas.ContextContribution(**c) for c in by_context],

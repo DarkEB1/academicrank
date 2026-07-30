@@ -67,6 +67,8 @@ export const METHOD_COPY: Record<Uncertainty['method'], string> = {
     'Uncertainty estimated by leave-one-out over your trust seeds: each seed was removed in turn and the score recomputed.',
   repeat_sample:
     'Uncertainty estimated by repeated random-walk sampling: the walk was rerun and the spread of results measured.',
+  proportional_fallback:
+    'No resampling was possible for this score, so the interval is a crude band set proportional to the estimate itself. It is a placeholder, not a measurement, and it should not be used to order anything.',
 };
 
 /* ------------------------------------------------------------------ */

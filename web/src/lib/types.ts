@@ -4,7 +4,10 @@
  * contract, the contract wins.
  */
 
-export type UncertaintyMethod = 'leave_one_out' | 'repeat_sample';
+export type UncertaintyMethod =
+  | 'leave_one_out'
+  | 'repeat_sample'
+  | 'proportional_fallback';
 
 export type Uncertainty = {
   stderr: number;
