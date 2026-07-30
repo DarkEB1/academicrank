@@ -516,6 +516,35 @@ upload groups with undo-all, the verbatim display-level-exclusion caveat on /par
 post-import landing on /recommendations with the dial raised. npm build clean,
 71/71 vitest (9 new).
 
+## Phase 5 — end-to-end + FINAL GATE
+
+**06:30** Full pytest after the container rebuild: 93+1 green (the one failure was
+test_api's uncertainty-method whitelist not knowing the parallel session's honest
+`proportional_fallback` label — updated). Old e2e suite: 25 passed against the new
+UI build. New 10-uploads spec (written by the parallel session against the subagent's
+UI — the two dovetailed): two robustness fixes found by running it (exact-match
+heading; DOM-settled search waits with distinct query strings, since react-query
+serves identical keys from cache), then **4/4 passed in 52.7s** — upload → review
+(8/8 DOI pre-ticked) → import → recommendations → rankings → uploader sees own UL
+paper, second profile doesn't until opting in.
+
+**07:0x FINAL GATE:** `docker compose down -v && docker compose up -d`. Cold
+bootstrap from committed data alone: corpus loaded, graph rebuilt, engine pushed —
+111,552 nodes / 549,121 edges; the virgin database came up at alembic head
+f3c9e1d7b5a4 with mr_put_edges installed, zero manual steps (the Phase-0 wiring and
+the new extension image doing exactly their jobs). Full e2e suite against the reborn
+stack: **29 passed (2.6m)** — including the complete upload journey from absolute
+cold start. Shipping.
+
+A note for the record: a second working session was active on this machine for most
+of the build — same working tree, same stack. It contributed real improvements
+(build_graph dedupe, honest fallback labels, LOO subsampling, the normalize.py DOI
+fix, the 10-uploads spec, and the phase-3 commits themselves) and real hazards (a
+mid-rebuild purge of my confirmed upload that mimicked the exact bug the survival
+gate guards). The advisory lock on the upload test modules is the durable fix; the
+UL-trigram identity collision it exposed (D11) was a genuine product bug I would not
+have found alone tonight.
+
 ## Phase 3a — mr_put_edges engine patch + confirm path
 
 Rust patch (D10): `WritePutEdges` variant appended to ReqData (bincode indices
