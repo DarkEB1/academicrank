@@ -235,23 +235,24 @@ disjoint seed sets have disjoint bibliographies. It is a real pass, not a strong
 
 ---
 
-## 13. Search does not rank exact title matches first
+## 13. Search does not rank exact title matches first — FIXED 2026-07-30
 
-`/api/papers/search` uses Postgres `tsvector` relevance over title + abstract. An exact
-or near-exact title query frequently does not come back first — searching
-`Maximum Likelihood from Incomplete Data` returns that paper **third**, behind two
-loosely related ones, and `central role propensity score observational` does not return
-Rosenbaum & Rubin at all in the top 3.
+Was: `ts_rank` over a concatenated title+abstract vector treated a title hit and an
+abstract hit alike, and long abstracts diluted the signal — searching
+`Maximum Likelihood from Incomplete Data` returned that paper **third**, and
+`central role propensity score observational` did not return Rosenbaum & Rubin in
+the top 3 at all.
 
-Cause: `ts_rank` over a concatenated title+abstract vector treats a title hit and an
-abstract hit alike, and long abstracts dilute the signal. The fix is a weighted vector
-(`setweight(to_tsvector(title),'A') || setweight(to_tsvector(abstract),'B')`) plus a
-trigram similarity boost on the title, which the schema already has an index for
-(`ix_works_title_trgm`). Not applied — found while scripting the demo, and it changes a
-query path the end-to-end suite was already running against.
+Fixed by the weighted vector alone (migration `a9d4f0c1b3e5`:
+`setweight(title,'A') || setweight(abstract,'B')`; ts_rank scores A=1.0 vs B=0.4).
+The trigram-boost half of the originally proposed fix was **not** applied: both
+recorded failures pass without it, so it would have been an untested ranking term.
+Gates live in `api/tests/test_search_ranking.py` — 20-title exact-match property
+test (≥18/20 top-1) plus both regressions pinned.
 
-Practical effect: users must scan a few results rather than getting the paper they typed.
-DEMO.md therefore states which result position to take for each seed.
+Residual caveat: the corpus contains near-duplicate records of some classic papers
+(three copies of Rosenbaum & Rubin 1983 rank 1-2-3 for its own title). That is a
+corpus-quality issue (§5 territory), not a ranking one.
 
 ---
 

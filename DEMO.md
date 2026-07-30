@@ -28,17 +28,17 @@ That sentence is the product. Everything else is machinery for making it inspect
 
 Go to **Trust** (`/#/trust`). Search and add these five, all at strength **4**:
 
-These queries were checked against the live search; the position of the paper you want
-is given, because search ranks by relevance and does not always put an exact title
-first (`KNOWN_ISSUES.md` §13).
+These queries were checked against the live search. Since the weighted-tsv fix
+(`KNOWN_ISSUES.md` §13, fixed 2026-07-30) every one of them returns the wanted paper
+**first** — take the top result for each.
 
-| Search for | Take result | Paper |
-|---|---|---|
-| `Multiple Imputation Nonresponse Surveys` | **1st** | Multiple Imputation for Nonresponse in Surveys |
-| `Bayesian Inference for Causal Effects` | **1st** | Bayesian Inference for Causal Effects: The Role of Randomization |
-| `Inference and missing data` | **1st** | Inference and missing data |
-| `Estimating causal effects treatments randomized nonrandomized` | **1st** | Estimating causal effects of treatments in randomized and nonrandomized studies |
-| `Maximum Likelihood from Incomplete Data` | **3rd** | Maximum Likelihood from Incomplete Data Via the *EM* Algorithm |
+| Search for | Paper |
+|---|---|
+| `Multiple Imputation Nonresponse Surveys` | Multiple Imputation for Nonresponse in Surveys |
+| `Bayesian Inference for Causal Effects` | Bayesian Inference for Causal Effects: The Role of Randomization |
+| `Inference and missing data` | Inference and missing data |
+| `Estimating causal effects treatments randomized nonrandomized` | Estimating causal effects of treatments in randomized and nonrandomized studies |
+| `Maximum Likelihood from Incomplete Data` | Maximum Likelihood from Incomplete Data Via the *EM* Algorithm |
 
 That is a coherent, densely connected cluster — the Rubin school of causal inference and
 missing data — which is the strongest region of this corpus.
