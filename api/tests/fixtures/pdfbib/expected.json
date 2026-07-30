@@ -1,0 +1,43 @@
+{
+  "_comment": "Hand-maintained ground truth. Entry counts were established independently of the splitter by regex over plain extract_text output (see MANIFEST.md). Do not regenerate mechanically.",
+  "two_column_doi_rich": {
+    "method": "bracket_numeric",
+    "structural": true,
+    "n_entries": 60,
+    "keys": "1..60",
+    "heading": null,
+    "first_prefix": "[1] W. M. Witzel, R. de Sousa, and S. D. Sarma, Physical Review B 72",
+    "last_prefix": "[60] L. T. Hall, J. H. Cole, and L. C. L. Hollenberg, Physical Review B 90",
+    "min_doi_count": 30
+  },
+  "ams_alpha_math_ag": {
+    "method": "alpha_key",
+    "structural": true,
+    "n_entries": 35,
+    "keys": ["BCHM10", "Bir12", "BMSZ15", "Cam91", "CK15", "FM83", "Fox57", "Fuj86", "GHS03", "GKP13", "GM88", "GS75", "GT10", "Hat02", "Hem87", "Hir73", "HX13", "Kaw98", "KK14", "KL09", "KM98", "KMM92", "Kol93", "Kol96", "Kol07", "Kol11", "Kol13", "Kol14", "KS01", "Kul77", "Liu15", "MM86", "Sim15", "Tak03", "Xu14"],
+    "heading": "References",
+    "first_prefix": "[BCHM10] Caucher Birkar, Paolo Cascini, Christopher D. Hacon, and James McKernan",
+    "last_prefix": "[Xu14] Chenyang Xu, Finiteness of algebraic fundamental groups"
+  },
+  "apa_unnumbered_stats": {
+    "method": "indent",
+    "structural": false,
+    "n_entries": 37,
+    "keys": null,
+    "heading": "References",
+    "first_prefix": "Bates D, Maechler M (2014). Matrix: Sparse and Dense Matrix Classes",
+    "last_prefix": "Wood S, Scheipl F (2013). gamm4: Generalized additive mixed models",
+    "entry_head_pattern": "^[A-ZÀ-Þ][\\w'\\u00C0-\\u024F-]+.{0,120}?\\((?:19|20)\\d{2}[a-z]?\\)\\."
+  },
+  "pre2000_no_doi": {
+    "method": "bracket_numeric",
+    "structural": true,
+    "n_entries": 65,
+    "keys": "1..65",
+    "heading": "References",
+    "first_prefix": "[1] J. Maldacena and A. Strominger, hep-th/9710014.",
+    "last_prefix": "[65] S. Hawking and J. Ellis, The large scale structure of spacetime",
+    "max_doi_count": 0,
+    "min_arxiv_count": 40
+  }
+}

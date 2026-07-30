@@ -393,3 +393,39 @@ moved N→N+1); gated `ensure_seeded` makes **0** `mr_put_edge` calls when nothi
 (<250ms, engine untouched) and re-puts all 6 edges after a version bump.
 
 **16:20–16:35** Gate: full e2e suite **25 passed** (5.2m). Committing Phase 0.
+
+## Phase 1 — pdfbib extraction library
+
+**16:40–17:30** Fixture hunt, by download-and-inspect (9 candidate PDFs). Both obvious
+math.AG candidates (BCHM, Hacon–McKernan) turned out to use *numeric* keys; two more
+(Hacking–Prokhorov, dFEM) use alpha keys *without year digits* — the [Har77] shape the
+spec's structural regex demands took a third try (Kollár–Xu 1503.08320). The
+"two-column DOI-rich" slot: REVTeX 4.2 prints DOIs by default, so any recent quant-ph
+paper works; took 2607.26019 from the live arXiv listing (61→60 keys, 36 DOIs, and —
+bonus — NO References heading, which forced the keyed-region fallback to exist).
+
+**17:30–[next day] 00:30** Library written, then beaten into shape by the fixtures.
+Failures found by execution, in order: two-column detection drowned by equation-fragment
+boxes (voting now restricted to column-width boxes); REVTeX has no bibliography heading
+(keyed-region fallback); lme4's References is followed by appendices that a numbered
+list inside nearly hijacked (font-size region termination + STRUCTURAL_MIN_ENTRIES 3→6);
+detached key columns ('[24]' as its own line) shear entry assembly (visual-row merge);
+a sparse last page false-positived as two-column and cut [Xu14] (min-voting-boxes +
+central-gutter constraints); scorer tested author-shape on text still carrying the
+[key] prefix (author_frac was 0.0 for every keyed candidate); JSS 'Bates D' initials
+without dots defeated the author regex; the column-shear adversarial case was ACCEPTED
+until out-of-order numeric keys became a hard gate (D8.3); multiprocessing spawn hung
+the timeout worker under pytest on Windows (D8.1 — now a plain subprocess).
+
+**00:30** Gate, printed by `test_phase1_acceptance_gate`:
+```
+two_column_doi_rich:  60/60 = 100.0%
+ams_alpha_math_ag:    35/35 = 100.0%
+apa_unnumbered_stats: 36/37 =  97.3%
+pre2000_no_doi:       65/65 = 100.0%
+fixtures at >=90%: 4/4 (gate needs >=3); all 4 adversarial cases REFUSED
+```
+Ground truth counts were established independently (regex over plain extract_text).
+41 pdfbib tests pass (25 named-constant tests, 9 hermetic split/adversarial, 7 slow
+PDF-path). App untouched: no api-image rebuild, so the Phase-0 e2e result stands.
+Committing Phase 1.

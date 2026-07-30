@@ -302,6 +302,49 @@ Also deliberate: the alembic `Config` is built without `alembic.ini`, because en
 calls `logging.config.fileConfig()` when an ini is present, which would clobber
 uvicorn's logging from inside a startup hook. env.py resolves the database URL itself.
 
+---
+
+## D8. pdfbib (Phase 1) forks, decided by execution against the fixtures
+
+### D8.1 The timeout worker is a subprocess, not multiprocessing
+
+`multiprocessing` spawn re-imports the parent's MAIN module in the child. Under
+`python -m pytest` (and under uvicorn in the container) that re-runs the host program
+inside the worker — verified: the happy-path worker test hung for the full 120 s
+budget on Windows. The worker is now `python -m provenance.pdfbib.worker` via
+`subprocess.run(timeout=…)`, PDF on stdin, JSON on stdout. **Rejected:** a thread
+(cannot be killed; a hostile PDF pins a core for minutes).
+
+### D8.2 Structural check needs 6 entries, not 3
+
+A gap-free `[1]..[4]` sequence occurs in the wild inside numbered appendix lists (the
+lme4 fixture served one up immediately) and in crafted prose. `STRUCTURAL_MIN_ENTRIES=6`
+sends anything smaller to the scored path, whose failure mode is review, not silent
+mis-trust. No real paper cites fewer than 6 works.
+
+### D8.3 Non-structural numeric splits must have ordered keys
+
+A sheared reading order (failed column detection) produces plausible entries with
+scrambled keys ([1],[4],[2],[5]…) that pass every per-entry feature gate — found by the
+column-break adversarial case, which was *accepted* until this gate existed.
+`MIN_KEY_ORDER_FRACTION = 0.8` of adjacent pairs must increase; one misread key in a
+real bibliography still leaves ~98%.
+
+### D8.4 Full-width lines on two-column pages are dropped from the region
+
+On a page with column-assigned lines, a column-less line is a footnote, rule or
+caption; keeping it splices footnote text into whichever entry spans the column break
+(and, when the footnote carries its own `[1]` markers, corrupts the key sequence). A
+real reference line on such a page always has a column.
+
+### D8.5 Alpha keys without digits fall through to scoring
+
+The structural alpha check demands `[A-Z][a-zA-Z+-]*\d{2}[a-z]?` (`[Har77]`, `[BCHM10]`).
+Keys like `[KM]`/`[Kaw]` (checked: Hacking–Prokhorov, de Fernex–Ein–Mustață) are real
+but shape-ambiguous — one capital letter plus letters matches ordinary bracketed
+asides too, so they are not *decisive*; those bibliographies still split via the
+scored path. Recorded because the fixture hunt hit both styles.
+
 ### D7.1 ensure_seeded gating and the engine-restart blind spot
 
 `ranking.ensure_seeded` is now gated on (trust signature, graph_meta.version): zero
