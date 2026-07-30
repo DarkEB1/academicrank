@@ -28,6 +28,14 @@ const SCALAR_CONTROLS: Record<
   string,
   { min: number; max: number; step: number; label: string; gloss: string }
 > = {
+  lift_gamma: {
+    min: 0,
+    max: 1,
+    step: 0.05,
+    label: 'lift γ (background exponent)',
+    gloss:
+      'How strongly the Lift column discounts a paper’s general reachability. 0 reproduces the raw trust ordering; 1 is full normalisation, which measurably buries well-connected papers. 0.5 held recall while dropping the fame of the top 25 in evaluation.',
+  },
   alpha: {
     min: 0,
     max: 1,
@@ -75,6 +83,10 @@ export function ParamsScreen(): JSX.Element {
       const value = serverParams[key as keyof Params];
       if (typeof value === 'number') out[key] = value;
     }
+    // lift_gamma is honoured live by the server, so it always gets a control even
+    // for profiles created before it existed. (The unhonoured scalars only render
+    // if a stored value exists, and then only to show their 422.)
+    if (out.lift_gamma === undefined) out.lift_gamma = 0.5;
     return out;
   });
   const [rejected, setRejected] = useState<Record<string, string>>({});

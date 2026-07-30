@@ -45,6 +45,14 @@ export type ScoredPaper = PaperBrief & {
   rank: number;
   /** 0..1, how much trust/global/citations disagree */
   disagreement: number;
+  /**
+   * Fame-normalised proximity: log(trust+eps) - lift_gamma*log(background+eps).
+   * Signed: negative means "less reachable for you than for a generic reader".
+   * A separate displayed field; `trust` keeps its meaning.
+   */
+  lift: number;
+  /** Absent only on paths that never computed lift (e.g. simulate scratch rows). */
+  lift_uncertainty: Uncertainty | null;
 };
 
 /* ------------------------------------------------------------------ */
@@ -80,6 +88,8 @@ export const WEIGHTED_CONTEXTS: Context[] = [
 
 export type Params = {
   context_weights?: Record<string, number>;
+  /** Background exponent for lift, 0..1; 0 = raw trust ordering, default 0.5. */
+  lift_gamma?: number;
   alpha?: number;
   epoch_half_life_years?: number;
   num_walks?: number;

@@ -16,13 +16,14 @@ import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
 import { cn } from '@/lib/cn';
 
-export type SortKey = 'rank' | 'year' | 'citations' | 'trust' | 'disagreement';
+export type SortKey = 'rank' | 'year' | 'citations' | 'trust' | 'lift' | 'disagreement';
 
 const SORTABLE: { key: SortKey; label: string; numeric: boolean }[] = [
   { key: 'rank', label: 'Rank', numeric: true },
   { key: 'year', label: 'Year', numeric: true },
   { key: 'citations', label: 'Cited', numeric: true },
   { key: 'trust', label: 'Trust', numeric: true },
+  { key: 'lift', label: 'Lift', numeric: true },
   { key: 'disagreement', label: 'Disagreement', numeric: true },
 ];
 
@@ -34,6 +35,8 @@ function sortValue(paper: ScoredPaper, key: SortKey): number {
       return paper.cited_by_count;
     case 'trust':
       return paper.trust;
+    case 'lift':
+      return paper.lift;
     case 'disagreement':
       return paper.disagreement;
     default:
@@ -126,6 +129,13 @@ export function RankingTable({
                 className="w-[13rem]"
               />
               <SortHeader
+                label="Lift"
+                sortKey="lift"
+                sort={sort}
+                onToggle={toggle}
+                className="w-[6.5rem]"
+              />
+              <SortHeader
                 label="Disagree"
                 sortKey="disagreement"
                 sort={sort}
@@ -150,7 +160,7 @@ export function RankingTable({
               >
                 {tied ? (
                   <tr>
-                    <td colSpan={7} className="px-3 pb-0 pt-3">
+                    <td colSpan={8} className="px-3 pb-0 pt-3">
                       <p className="text-2xs uppercase tracking-[0.08em] text-accent">
                         {run.items.length} statistically tied — order below is arbitrary
                       </p>
@@ -294,6 +304,21 @@ function RankingRow({
       <td className="px-3 py-3">
         <ScoreBar value={paper.trust} uncertainty={paper.uncertainty} domain={domain} />
         {tied ? <span className="sr-only">Tied with adjacent rows.</span> : null}
+      </td>
+
+      <td
+        className="px-3 py-3.5 font-mono text-xs tnum"
+        title="Proximity relative to how reachable this paper is for everyone. Positive: closer to you than to a generic reader. The denominator is a fixed background and carries no error bar of its own."
+      >
+        <span className={paper.lift < 0 ? 'text-ink-faint' : 'text-ink'}>
+          {paper.lift >= 0 ? '+' : ''}
+          {paper.lift.toFixed(2)}
+        </span>
+        {paper.lift_uncertainty ? (
+          <span className="block text-2xs text-ink-faint">
+            ± {paper.lift_uncertainty.stderr.toFixed(2)}
+          </span>
+        ) : null}
       </td>
 
       <td className="px-3 py-3.5">
