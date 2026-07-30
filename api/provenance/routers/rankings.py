@@ -516,7 +516,9 @@ def simulate(
 
     weights = services.stored_weights(profile)
     nonce = secrets.token_hex(4)
-    stubs = services.stub_ids(db)
+    # Hidden uploads are filtered exactly like stubs so `before` and `after`
+    # stay comparable with the real ranking (which excludes both).
+    stubs = services.stub_ids(db) | ranking.hidden_upload_ids(db, profile)
 
     # `before` is the profile's *current* ranking, which build_pool has already
     # computed and cached. Re-deriving it on a scratch ego would double the engine
@@ -664,11 +666,17 @@ def subgraph(
                             else config.TRUST_STRENGTH_SCALE.get(t.strength, 0.7)),
                 ))
 
+    # Visibility: other profiles' uploaded works never enter this profile's
+    # graph view unless it opted in (display-level, spec).
+    hidden = ranking.hidden_upload_ids(db, profile)
+
     labels = services.node_labels(db, node_ids)
     nodes: list[schemas.GraphNodeOut] = []
     for n in node_ids:
-        kind, label, year = labels.get(n, (services.node_kind(n), n, None))
         wid = node_to_work_id(n)
+        if wid and wid in hidden:
+            continue
+        kind, label, year = labels.get(n, (services.node_kind(n), n, None))
         nodes.append(schemas.GraphNodeOut(
             id=n, label=label, kind=kind,
             trust=pool.trust_values.get(wid, 0.0) if wid else 0.0,

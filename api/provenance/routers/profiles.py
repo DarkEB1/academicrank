@@ -19,11 +19,15 @@ COOKIE_MAX_AGE = 365 * 24 * 3600
 
 
 def _default_params() -> dict:
-    return {"context_weights": dict(config.DEFAULT_CONTEXT_WEIGHTS)}
+    return {"context_weights": dict(config.DEFAULT_CONTEXT_WEIGHTS),
+            "include_user_uploads": False}
 
 
 def _stored(profile: Profile) -> schemas.StoredParams:
-    return schemas.StoredParams(context_weights=services.stored_weights(profile))
+    return schemas.StoredParams(
+        context_weights=services.stored_weights(profile),
+        include_user_uploads=ranking.include_user_uploads(profile),
+    )
 
 
 @router.post("/profiles", response_model=schemas.ProfileCreated,
@@ -228,7 +232,12 @@ def set_params(
                 )
             weights[k] = fv
 
-    profile.params = {**(profile.params or {}), "context_weights": weights}
+    new_params = {**(profile.params or {}), "context_weights": weights}
+    if body.include_user_uploads is not None:
+        # Display-level exclusion only (the UI carries the caveat verbatim):
+        # one shared graph, walks flow through uploaded edges for everyone.
+        new_params["include_user_uploads"] = bool(body.include_user_uploads)
+    profile.params = new_params
     db.commit()
     services.invalidate_pool(profile.id)
 
@@ -239,4 +248,8 @@ def set_params(
         pool = services.build_pool(db, profile, context="aggregate", exclude_trusted=True)
         preview = services.scored_page(db, pool.items[:5], pool, start_rank=1)
 
-    return schemas.ParamsResponse(context_weights=weights, preview=preview)
+    return schemas.ParamsResponse(
+        context_weights=weights,
+        include_user_uploads=ranking.include_user_uploads(profile),
+        preview=preview,
+    )

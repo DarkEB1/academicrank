@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import text
 
 from .. import config, ranking, schemas, services
-from ..deps import DbSession, OwnedProfile
+from ..deps import DbSession, OptionalProfile, OwnedProfile
 from ..models import Trust, Work, node_to_work_id, profile_node, work_node
 
 router = APIRouter(prefix="/api", tags=["papers"])
@@ -24,6 +24,7 @@ TRGM_THRESHOLD = 0.2
 @router.get("/papers/search", response_model=schemas.SearchResponse)
 def search(
     db: DbSession,
+    maybe_profile: OptionalProfile,
     q: str = Query(min_length=2),
     year_from: Optional[int] = None,
     year_to: Optional[int] = None,
@@ -44,6 +45,17 @@ def search(
     if year_to is not None:
         year_sql += " AND w.year <= :yt"
         params["yt"] = year_to
+
+    # Visibility of user-contributed works (display-level, spec): hidden unless
+    # the profile opted in; the uploader always sees their own; anonymous
+    # callers never see them (the default is off).
+    if maybe_profile is None:
+        year_sql += " AND w.source <> 'user_upload'"
+    elif not ranking.include_user_uploads(maybe_profile):
+        year_sql += (" AND (w.source <> 'user_upload' OR EXISTS ("
+                     "SELECT 1 FROM uploads u WHERE u.work_id = w.id "
+                     "AND u.profile_id = :vis_me))")
+        params["vis_me"] = maybe_profile.id
 
     total = int(db.execute(text(
         "SELECT count(*) FROM works w "

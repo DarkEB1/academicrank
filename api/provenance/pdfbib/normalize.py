@@ -15,8 +15,12 @@ _WS = re.compile(r"\s+")
 # tolerates far better than a split word.
 _HYPHEN_BREAK = re.compile(r"(\w)-\s+(\w)")
 # Trailing ', pp. 1-24.' / ', 113-199.' page ranges add noise to title matching.
+# The digits must follow a separator: a digit-range GLUED to preceding text is
+# the tail of an identifier, not a page range -- observed live on the DOI
+# 10.1016/0016-0032(58)90688-4, whose '90688-4' this used to eat, mutilating
+# the DOI and downgrading a certain match to a review-queue entry.
 _TRAIL_PAGES = re.compile(
-    r"[,;]?\s*(?:pp?\.\s*)?\d{1,5}\s*[-–—]\s*\d{1,5}\.?\s*$")
+    r"([,;\s])\s*(?:pp?\.\s*)?\d{1,5}\s*[-–—]\s*\d{1,5}\.?\s*$")
 
 
 def join_lines(lines: list[str]) -> str:
@@ -42,4 +46,4 @@ def normalise(text: str) -> str:
 
 
 def strip_trailing_pages(text: str) -> str:
-    return _TRAIL_PAGES.sub("", text).strip()
+    return _TRAIL_PAGES.sub("", text).strip().rstrip(",;")

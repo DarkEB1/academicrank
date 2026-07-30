@@ -285,7 +285,59 @@ the same action *is* asserted.
 
 ---
 
-## 16. Alembic is present but never runs — column additions will not reach live databases
+## 17. Uploads write into a graph shared by every profile; exclusion is display-level only
+
+`POST /api/uploads/{id}/confirm` writes real `citations`/`graph_edges` rows and engine
+edges into the ONE graph all profiles share. The `include_user_uploads` toggle
+(default off) removes uploaded `UL…` works from rankings, search, recommendations,
+blindspots and the graph view — but walks still propagate through uploaded edges for
+everyone, so an excluding user's scores are still perturbed by uploads *existing*.
+This cannot be fixed on this engine (one graph; U→U edges replicate into every
+context). It is bounded — hundreds of edges among ~550k, under Monte Carlo score
+estimates — but the system must never claim exclusion isolates you, and the UI
+carries that caveat verbatim.
+
+## 18. A bibliography is not an endorsement
+
+Upload-seeded trust defaults to 3/5 ("I cited this"), is labelled with its source
+upload, and is undoable as a batch. That is mitigation, not a claim the semantics
+are exact: people cite work they refute.
+
+## 19. Nothing measurably discounts coordinated or self-citation-heavy uploads
+
+The sybil suppression measured on this graph was 1.00 ± 0.23 — absent. Labelling
+(`source='user_upload'`, self-citation badges in review) and default-exclusion are
+the actual defence. A citation ring uploaded as PDFs would enter the graph like any
+other upload.
+
+## 20. Bibliography recall degrades hardest exactly where the corpus is weakest
+
+Undated book bibliographies — pre-2000 monographs — fail the extraction year gate
+and are refused to review rather than parsed (deliberate: the failure mode is
+review, never silent mis-trust). Combined with issue 11, older literature is
+doubly under-served: harder to parse in, harder to reach in the graph.
+
+## 21. One confirmed upload globally invalidates ranking caches
+
+Confirm bumps `graph_meta.version`, which every score cache keys on: every other
+profile's next read is a cold one (40–90 s worst case). Chosen deliberately over
+serving scores computed against a graph that no longer exists.
+
+## 22. Engine node names from deleted uploads persist until restart
+
+`mr_delete_edge` removes edges (verified: all contexts in one call), but the engine's
+node registry never shrinks: an undone upload's `UL…` node NAME lingers until the
+next mr-service restart or full rebuild. Harmless — no edges, unreachable by walks —
+but visible in `mr_nodelist`, and it is litter.
+
+---
+
+## 16. ~~Alembic is present but never runs~~ — FIXED in the upload build's Phase 0
+
+Fixed 2026-07-29: `alembic upgrade head` now runs from the api lifespan hook before
+`create_all`, stamping legacy databases at the initial revision first (DECISIONS D7).
+Verified live: the Phase-2 and Phase-3b column additions reached the running database
+on container restart with no manual step. Original finding kept below for the record.
 
 Found during adversarial review of the upload-feature spec. `api/Dockerfile` copies
 `alembic.ini` and `alembic/` into the image, but nothing — no compose command, no

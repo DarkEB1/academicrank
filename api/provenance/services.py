@@ -406,6 +406,9 @@ def build_pool(
     key = (
         profile.id, sig, exclude_trusted, _check_generation(db, profile.id),
         tuple(sorted(weights.items())),
+        # The pool's items are filtered by the visibility toggle, so the flag
+        # is part of what determines the pool.
+        ranking.include_user_uploads(profile),
     )
     now = time.time()
     with _pool_lock:

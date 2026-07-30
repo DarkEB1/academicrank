@@ -52,6 +52,19 @@ def current_profile(request: Request, db: DbSession) -> Profile:
 CurrentProfile = Annotated[Profile, Depends(current_profile)]
 
 
+def optional_profile(request: Request, db: DbSession) -> Optional[Profile]:
+    """The profile when a valid token was sent, None otherwise. For endpoints
+    that work anonymously but personalise when they can (search applies the
+    per-profile upload-visibility filter)."""
+    token = bearer_token(request)
+    if not token:
+        return None
+    return db.query(Profile).filter(Profile.token == token).one_or_none()
+
+
+OptionalProfile = Annotated[Optional[Profile], Depends(optional_profile)]
+
+
 def owned_profile(profile_id: str, profile: CurrentProfile) -> Profile:
     """The `{id}` in the path must be the authenticated profile. `me` is accepted as an
     alias so the client does not have to interpolate its own id everywhere."""

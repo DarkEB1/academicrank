@@ -70,13 +70,19 @@ def bibliography_pdf(entries: list[str], title: str) -> bytes:
     page2 = [("References", 740.0, 14.0)]
     y = 712.0
     for i, e in enumerate(entries):
-        text_line = f"[{i + 1}] {e}"
-        # wrap crudely at ~95 chars so lines stay on the page
-        while len(text_line) > 95:
-            page2.append((text_line[:95], y, 10.0))
-            text_line = "    " + text_line[95:]
-            y -= 14
-        page2.append((text_line, y, 10.0))
+        # Word-wrap: a token split mid-DOI would break DOI matching for that
+        # entry (found the hard way -- one 8-ref upload came back with 7).
+        words = f"[{i + 1}] {e}".split(" ")
+        line = ""
+        for w in words:
+            if line and len(line) + 1 + len(w) > 92:
+                page2.append((line, y, 10.0))
+                y -= 14
+                line = "    " + w
+            else:
+                line = f"{line} {w}" if line else w
+        if line:
+            page2.append((line, y, 10.0))
         y -= 18
     return make_pdf([page1, page2])
 

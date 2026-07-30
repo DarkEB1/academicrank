@@ -17,6 +17,13 @@ of quality, correctness, or importance, and the interface says so in those words
 - **Trust set builder** — search the corpus, add papers at strength 1–5, mark distrust,
   import a `.bib` file. Below five seeds it tells you the rankings are unreliable
   instead of pretending otherwise.
+- **Upload your own paper** — drop a PDF, review its parsed bibliography (DOI/arXiv
+  matches arrive pre-ticked; fuzzier matches need an explicit tick), and seed your
+  trust set at 3/5 per reference in one action. The paper and any references OpenAlex
+  can resolve enter the graph as real nodes, labelled `user_upload` when they exist
+  only because of the upload, hidden from other profiles unless they opt in, and
+  removable with one undo. This is also the only path by which papers *not* in
+  OpenAlex — preprints, unpublished work — can exist in this system at all.
 - **Personalised rankings** — every score carries an error bar, and papers that are
   statistically tied are shown as tied rather than given a spurious order.
 - **Explanations** — the actual contributing paths from your trust set to a target:
@@ -242,6 +249,17 @@ useful number and an honest one, but it is not the same number.
 citation neighbours of a seed. That is defensible (a citation *is* the strongest signal)
 but it means the default view is closer to "your reading list's bibliography" than to
 discovery. The diversity dial and blindspots exist for this reason.
+
+**Upload exclusion is display-level, not isolation.** There is one shared graph; walks
+propagate through uploaded edges for everyone, so even a profile that keeps
+`include_user_uploads` off has its scores perturbed by uploads *existing*. This cannot
+be fixed on this engine (one graph; user-to-user edges replicate into every context).
+It is bounded — hundreds of edges among ~550k, under scores that are Monte Carlo
+estimates — but the system never claims exclusion isolates you. Relatedly: a
+bibliography is not an endorsement (3/5 default strength, provenance labels and undo
+are mitigation, not exact semantics), and nothing here measurably discounts coordinated
+or self-citation-heavy uploads — the sybil measurement found no suppression to rely on.
+See `KNOWN_ISSUES.md` §17–§22.
 
 ---
 
