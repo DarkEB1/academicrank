@@ -16,9 +16,17 @@ Two design constraints, from the v2 spec (R2), both load-bearing:
     `core/src/counter.rs`), which suppresses hub re-entry -- measured at 37% of all
     visit mass, 49% of entity-hop mass (experiments doc). The naive series would add
     that mass back and worsen the exact symptom the product is fixing. Zeroing seed
-    positions after each step is the cheap deterministic analogue at the source;
-    `scripts/validate_propagate.py` holds it to median Spearman >= 0.90 against the
-    engine before anything user-facing may consume trust scores from here.
+    positions after each step is the cheap analogue at the source, and the
+    non-backtracking correction in `_kernel` removes first-order 2-cycle returns.
+
+    **Validation outcome (scripts/validate_propagate.py, 2026-07-30): FAIL against
+    the 0.90 gate** -- median Spearman ~0.84 vs the engine, top-100 overlap ~0.85.
+    The residual is the engine's revisit-dedup at all lags, which no per-node
+    monotone correction can close (Spearman is rank-based). Consequence, honoured
+    by this codebase: **trust scores from this module are not user-facing**. The
+    engine remains the only trust scorer; the product consumes only `background()`
+    (the lift denominator), whose fitness rests on the E5/E6 measurements rather
+    than on engine agreement.
   * **No per-edge-type constants inside the row-normalised transition matrix.**
     Entity nodes carry out-edges of exactly one relation type, so a per-type factor
     cancels under row normalisation (the Cause-3 no-op, measured 14,801/14,801).
@@ -79,7 +87,16 @@ class PropagationGraph:
 
         rowsum = np.asarray(A.sum(axis=1)).ravel()
         rowsum[rowsum == 0] = 1.0
-        self._PT = (sp.diags(1.0 / rowsum) @ A).T.tocsr()
+        P = (sp.diags(1.0 / rowsum) @ A).tocsr()
+        self._PT = P.T.tocsr()
+        # 2-step return diagonal: D[p] = sum_m P[p,m]*P[m,p], the probability of
+        # bouncing straight back through any intermediary (mutual citations,
+        # singleton entities). The engine's unique-visit counting discards exactly
+        # this flow (a walk cannot revisit its previous node in the counters), and
+        # it is 37% of all visit mass on this graph -- leaving it in is what held
+        # the engine correlation at rho ~0.85. Subtracting D * x_{k-1} at each step
+        # makes the propagation non-backtracking to first order.
+        self._D = np.asarray(P.multiply(P.T).sum(axis=1)).ravel()
 
         self._is_paper = np.array([m.startswith("UW") for m in nodes])
         self._nonstub_paper = np.array([
@@ -114,28 +131,47 @@ class PropagationGraph:
         `seeds` maps work_id to signed weight (trust strength scale, or
         DISTRUST_WEIGHT for distrust).
         """
-        sv = np.zeros(len(self._nodes))
-        seed_rows = []
         total = sum(abs(v) for v in seeds.values()) or 1.0
+        pos: dict[int, float] = {}
+        neg: dict[int, float] = {}
         for wid, wt in seeds.items():
             i = self._idx.get("U" + wid)
-            if i is not None:
-                sv[i] = wt / total
-                seed_rows.append(i)
-        if not seed_rows:
+            if i is None:
+                continue
+            (pos if wt >= 0 else neg)[i] = abs(wt) / total
+        if not pos and not neg:
             return {}
-        seed_rows = np.array(seed_rows)
-
-        x = sv.copy()
-        out = self._theta[0] * x
-        for k in range(1, K + 1):
-            x = self._PT @ x
-            x[seed_rows] = 0.0          # absorb: returning walks are dead
-            out = out + self._theta[k] * x
+        # Positive and negative seeds propagate separately on non-negative mass
+        # (the non-backtracking clamp is only valid on a non-negative flow), then
+        # subtract -- linearity gives distrust as the exact mirror image.
+        out = self._kernel(pos)
+        if neg:
+            out = out - self._kernel(neg)
+        seed_rows = np.array(list(pos) + list(neg))
         out[seed_rows] = 0.0            # a seed never scores itself
 
         rows = self._paper_rows[out[self._paper_rows] != 0.0]
         return {self._nodes[i][1:]: float(out[i]) for i in rows}
+
+    def _kernel(self, seed_mass: dict[int, float]) -> np.ndarray:
+        """Seed-absorbing, non-backtracking truncated diffusion of non-negative
+        mass. See module docstring for why both properties exist."""
+        sv = np.zeros(len(self._nodes))
+        if not seed_mass:
+            return sv
+        for i, m in seed_mass.items():
+            sv[i] = m
+        seed_rows = np.array(list(seed_mass))
+        x_prev = np.zeros_like(sv)
+        x = sv.copy()
+        out = self._theta[0] * x
+        for k in range(1, K + 1):
+            x_next = self._PT @ x - self._D * x_prev   # non-backtracking correction
+            np.maximum(x_next, 0.0, out=x_next)        # numerical guard
+            x_next[seed_rows] = 0.0     # absorb: walks returning to a seed are dead
+            out = out + self._theta[k] * x_next
+            x_prev, x = x, x_next
+        return out
 
     def background(self) -> dict[str, float]:
         """Propagation from uniform-over-non-stub-papers: the denominator of `lift`.
@@ -147,6 +183,11 @@ class PropagationGraph:
         sv = np.zeros(len(self._nodes))
         ns = np.where(self._nonstub_paper)[0]
         sv[ns] = 1.0 / len(ns)
+        # PLAIN diffusion, deliberately -- no absorption (with every non-stub paper
+        # a seed it would zero the vector) and no non-backtracking correction: the
+        # measured evidence for the lift operating point (gamma=0.5, experiments
+        # E5/E6) was produced with exactly this denominator, and the denominator
+        # must match its evidence, not score()'s engine-approximation choices.
         x = sv.copy()
         out = self._theta[0] * x
         for k in range(1, K + 1):

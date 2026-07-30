@@ -170,3 +170,18 @@ with the global ego is 2/100), the five-variant bake-off, the LLM judge panel.
 **Unresolved:** the corpus (KNOWN_ISSUES #5) still caps everything. Thin-region trust
 sets score *better* on recall than dense-region ones (0.42 vs 0.33) but that is because
 their neighbourhoods are smaller, not because the results are better.
+
+---
+
+## Addendum 2026-07-30: engine correlation gate (plan Task 4)
+
+`scripts/validate_propagate.py`, 40 bibliography-derived egos, engine top-2500
+window, engine-support comparison: **FAIL — median Spearman 0.8417, IQR
+[0.8196, 0.8516], top-100 overlap ~0.85.** Seed absorption plus a first-order
+non-backtracking correction (subtracting the 2-step return diagonal) moved the
+median by less than 0.01; the residual is the engine's revisit-dedup at all lags,
+which is rank-structural and cannot be closed by any per-node monotone transform.
+
+Consequence, applied: `propagate.py` trust scores are not user-facing. The engine
+remains the sole trust scorer; the product consumes only `background()` (lift
+denominator, plain diffusion exactly as measured in E5/E6).
