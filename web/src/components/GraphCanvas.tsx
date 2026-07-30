@@ -41,10 +41,12 @@ export function GraphCanvas({
   selectRef.current = onSelect;
 
   const [settling, setSettling] = useState(false);
+  const [webglFailed, setWebglFailed] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    setWebglFailed(false);
 
     const graph = new Graph({ multi: true, type: 'directed' });
     const extent = trustExtent(nodes);
@@ -89,7 +91,26 @@ export function GraphCanvas({
 
     circular.assign(graph, { scale: 100 });
 
-    const renderer = new Sigma(graph, container, {
+    // Sigma needs a WebGL context and throws mid-construction when the browser
+    // refuses one (Firefox with hardware acceleration off or fingerprinting
+    // resistance on surfaces it as `TypeError: ... "blendFunc", u is null`).
+    // The canvas is a progressive enhancement over the keyboard-accessible node
+    // list below it, so a missing context degrades to a message -- it must not
+    // take the whole route down through the error boundary.
+    let renderer: Sigma;
+    try {
+      renderer = createRenderer();
+    } catch (err) {
+      console.warn('Graph canvas disabled: WebGL unavailable.', err);
+      graph.clear();
+      setWebglFailed(true);
+      return () => {
+        /* nothing rendered */
+      };
+    }
+
+    function createRenderer(): Sigma {
+      return new Sigma(graph, container as HTMLDivElement, {
       renderLabels: true,
       // Above a few thousand nodes, labels are the bottleneck and the noise.
       labelRenderedSizeThreshold: graph.order > 2500 ? 12 : 6,
@@ -105,7 +126,8 @@ export function GraphCanvas({
       allowInvalidContainer: true,
       minCameraRatio: 0.05,
       maxCameraRatio: 12,
-    });
+      });
+    }
 
     renderer.on('clickNode', ({ node }) => {
       const attrs = graph.getNodeAttributes(node);
@@ -181,6 +203,20 @@ export function GraphCanvas({
         >
           settling layout…
         </p>
+      ) : null}
+      {webglFailed ? (
+        <div
+          role="status"
+          className="absolute inset-x-6 top-6 rounded-sm border border-rule bg-surface/95 px-4 py-3 text-sm leading-relaxed text-ink"
+        >
+          <p className="font-medium">The graph canvas needs WebGL, which this browser refused.</p>
+          <p className="mt-1 text-xs text-ink-muted">
+            Usually hardware acceleration is switched off, or a privacy setting
+            (Firefox&apos;s fingerprinting resistance) blocks the context. Every node is
+            still available in the list beneath this panel — the canvas is a view of the
+            same data, not the data itself.
+          </p>
+        </div>
       ) : null}
     </div>
   );
