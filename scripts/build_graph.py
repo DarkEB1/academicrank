@@ -195,6 +195,43 @@ def build(conn, half_life: float) -> list[Edge]:
     return edges
 
 
+def dedupe(edges: list[Edge]) -> list[Edge]:
+    """Collapse edges that share (src, dst, context), keeping the strongest weight.
+
+    This is not cosmetic. `build()` emits four paper->paper relation families into the
+    same `citation` context, and 33,994 of them collide on a node pair -- a paper can
+    both cite and be bibliographically coupled to the same target. Without an explicit
+    rule the two consumers disagreed:
+
+      * `persist()` used `ON CONFLICT DO NOTHING`  -> FIRST wins
+      * `mr.bulk_load()` sends the full list and the engine's `set_edge` overwrites
+        (rank.rs:181 -> graph.rs:203)              -> LAST wins
+
+    So `python scripts/build_graph.py` produced an engine holding ~30k edge weights
+    that differ from `graph_edges` -- typically a strong `cites` (1.00) silently
+    replaced by a weak `couples` (0.012), a 63x reduction on ~8.7% of citation edges.
+    That falsified the promise in `persist()` below, and made any before/after
+    measurement across a rebuild meaningless. `bootstrap.py` avoided it only by
+    accident, because it replays the already-deduplicated table.
+
+    Max, not sum: these are alternative evidence for the same link, not additive
+    quantities, and summing would let a coupled citation outweigh a bare one purely
+    because two detectors fired. Max keeps the dominant relation, which for a
+    cites/couples collision is the deliberate citation.
+    """
+    best: dict[tuple[str, str, str], Edge] = {}
+    for e in edges:
+        k = (e.src, e.dst, e.context)
+        cur = best.get(k)
+        if cur is None or e.weight > cur.weight:
+            best[k] = e
+    dropped = len(edges) - len(best)
+    if dropped:
+        print(f"  deduped {dropped} colliding (src,dst,context) keys "
+              f"-> {len(best)} distinct edges", flush=True)
+    return list(best.values())
+
+
 def persist(conn, edges: list[Edge]) -> None:
     """Store the edge list so /explain can reconstruct paths over exactly the same
     data the scores were computed from."""
@@ -226,6 +263,9 @@ def main() -> int:
     engine = create_engine(url, future=True)
     with engine.connect() as conn:
         edges = build(conn, args.half_life)
+        # Deduplicate ONCE, before either consumer sees the list, so `graph_edges` and
+        # the engine hold identical weights. See dedupe() for what went wrong before.
+        edges = dedupe(edges)
         persist(conn, edges)
 
         if args.no_load:
