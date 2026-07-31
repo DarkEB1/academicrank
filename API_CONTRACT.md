@@ -94,7 +94,9 @@ set is empty, the response silently falls back to `rank: "global"` and
 values -- in fallback, `trust` *is* the global value, and the disclaimer plus
 `rank: "global"` carry the honesty. Only the top 500 text matches are ever
 ranked or paginated; matches beyond that window are invisible to ranked search
-(the disclaimer says so).
+(the disclaimer says so). `lift` (inherited from `ScoredPaper`) is never
+computed for ranked search and is always `0.0` with `lift_uncertainty: null`;
+consumers must not display it.
 
 ### `POST /api/profiles/{id}/trust`
 Body `{ work_id: string, strength: 1|2|3|4|5, is_distrust?: boolean }`.

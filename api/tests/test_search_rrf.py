@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import text
 
 from provenance.db import SessionLocal
+from provenance.meritrank import Uncertainty, assign_tie_groups
 from provenance.searchrank import FETCH_K, fuse, merit_ranks
 
 QUERY = "graph"  # broad token; assert non-empty and skip if the corpus lacks it
@@ -218,3 +219,51 @@ def test_trust_mode_does_not_corrupt_the_shared_pool_cache(client, warm_profile)
         "/rankings tie_group values changed after interleaved rank=trust "
         "searches -- the search mutated the shared pool cache's Uncertainty "
         f"instances instead of working on private copies: {mismatches}")
+
+
+# ---------------------------------------------------------------------------
+# assign_tie_groups: direction-insensitive gap test (pure unit tests, no live stack)
+# ---------------------------------------------------------------------------
+
+
+def _unc(stderr: float) -> Uncertainty:
+    return Uncertainty(stderr=stderr, ci_low=0.0, ci_high=0.0, tie_group=0,
+                       method="test", n_samples=1)
+
+
+def test_assign_tie_groups_breaks_on_ascent_not_just_descent():
+    """Regression: RRF-fused search order is NOT monotonic in trust value (unlike
+    every other caller of assign_tie_groups, which sorts its rows by value first).
+    A signed gap test (`prev_value - value > tol`) only ever breaks a group on a
+    DESCENT, so an ascent -- an out-of-pool 0.0 item immediately followed by a
+    pooled ~0.5 item -- never broke the bracket, and the UI told the user two
+    clearly separable papers were "statistically tied". The gap test must be
+    direction-insensitive (`abs(...)`) so a large gap breaks the group regardless
+    of which side is bigger.
+    """
+    rows = [
+        ("a", 0.5, _unc(0.01)),
+        ("b", 0.0, _unc(0.01)),  # descent 0.5 -> 0.0: old code already broke here
+        ("c", 0.5, _unc(0.01)),  # ascent 0.0 -> 0.5: old code did NOT break here
+    ]
+    assign_tie_groups(rows)
+    groups = [unc.tie_group for _wid, _v, unc in rows]
+    assert groups[0] != groups[1], "descent of 0.5 with tight stderr must break the group"
+    assert groups[1] != groups[2], "ascent of 0.5 with tight stderr must break the group too"
+    assert groups == [0, 1, 2], f"expected three distinct tie groups, got {groups}"
+
+
+def test_assign_tie_groups_monotonic_descending_unaffected():
+    """Sanity check that abs() is a no-op for the monotonic-descending callers
+    (rankings trust/lift sort, blindspots gap sort): behaviour must be identical
+    to the old signed test when values only ever descend.
+    """
+    rows = [
+        ("a", 0.90, _unc(0.01)),
+        ("b", 0.89, _unc(0.05)),   # tiny gap, well within tolerance: same group
+        ("c", 0.40, _unc(0.01)),  # big descent: new group
+    ]
+    assign_tie_groups(rows)
+    groups = [unc.tie_group for _wid, _v, unc in rows]
+    assert groups[0] == groups[1], "small descent within tolerance should stay tied"
+    assert groups[1] != groups[2], "large descent should break the group"

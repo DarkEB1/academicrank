@@ -286,6 +286,19 @@ def assign_tie_groups(ordered: list[tuple]) -> None:
     ranking into one tie group, which is technically defensible and completely useless
     to read. Two adjacent items are called tied when their gap is smaller than their
     mean standard error.
+
+    The gap test is direction-insensitive (`abs(...)`). Every caller sorts its rows by
+    value before calling this, so in isolation the gap is always a non-negative
+    descent and `abs()` is a no-op there. But callers that feed in an order which is
+    NOT monotonic in `value` (rank=trust search hands this the RRF-fused display
+    order, not a value-sorted order) can present an *ascent* between two adjacent
+    rows -- e.g. an out-of-pool 0.0 item immediately followed by a pooled ~0.5 item.
+    A signed test only ever breaks a group on a descent, so that ascent -- despite
+    being the largest, most separable gap in the list -- would never end the group,
+    and two papers with wildly different trust get bracketed as "statistically tied".
+    abs() makes the test symmetric so any large gap in either direction breaks the
+    group, which is correct for both the monotonic callers (no behaviour change) and
+    the non-monotonic one (the bug this fixes).
     """
     group = 0
     for i, row in enumerate(ordered):
@@ -293,6 +306,6 @@ def assign_tie_groups(ordered: list[tuple]) -> None:
         if i > 0:
             prev_value, prev_unc = ordered[i - 1][1], ordered[i - 1][2]
             tol = (unc.stderr + prev_unc.stderr) / 2.0
-            if (prev_value - value) > tol:
+            if abs(prev_value - value) > tol:
                 group += 1
         unc.tie_group = group
