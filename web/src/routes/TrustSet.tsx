@@ -56,7 +56,7 @@ export function TrustSetScreen(): JSX.Element {
 
   const [query, setQuery] = useState('');
   const debounced = useDebounced(query, 250);
-  const search = usePaperSearch(debounced);
+  const search = usePaperSearch({ q: debounced }, debounced.trim().length >= 2);
 
   const [pendingStrength, setPendingStrength] = useState<Record<string, number>>({});
   const [preview, setPreview] = useState<{

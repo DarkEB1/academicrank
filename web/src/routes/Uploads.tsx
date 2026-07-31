@@ -529,7 +529,7 @@ function FindMatchBody({
 }): JSX.Element {
   const [query, setQuery] = useState(reference.parsed_title ?? '');
   const debounced = useDebounced(query, 250);
-  const search = usePaperSearch(debounced);
+  const search = usePaperSearch({ q: debounced }, debounced.trim().length >= 2);
 
   return (
     <>

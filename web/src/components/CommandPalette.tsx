@@ -41,7 +41,7 @@ export function CommandPalette({
   const listRef = useRef<HTMLUListElement>(null);
   const debounced = useDebounced(query, 220);
 
-  const search = usePaperSearch(debounced, { enabled: open && debounced.trim().length >= 2 });
+  const search = usePaperSearch({ q: debounced }, open && debounced.trim().length >= 2);
 
   useEffect(() => {
     if (open) {

@@ -161,6 +161,23 @@ export type RankingsResponse = {
   timing_ms: number;
 };
 
+export type RankMode = 'relevance' | 'trust' | 'global';
+
+/** A search result whose *order* came from RRF; the scores are MeritRank. */
+export interface RankedSearchPaper extends ScoredPaper {
+  relevance_rank: number;
+  merit_rank: number;
+}
+
+export interface RankedSearchResponse {
+  total: number;
+  items: RankedSearchPaper[];
+  cold_start: ColdStart;
+  disclaimer: string;
+  /** Effective mode after fallback — a trust request can come back 'global'. */
+  rank: 'trust' | 'global';
+}
+
 export type RankingsQuery = {
   limit?: number;
   offset?: number;

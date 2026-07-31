@@ -17,6 +17,7 @@ import type {
   Params,
   RankingsQuery,
   RankingsResponse,
+  RankedSearchResponse,
   RecommendationsResponse,
   SearchResponse,
   SimulateBody,
@@ -37,6 +38,21 @@ export const keys = {
   health: ['health'] as const,
   me: ['me'] as const,
   search: (q: string, yf?: number, yt?: number) => ['search', q, yf ?? null, yt ?? null] as const,
+  paperSearch: (args: {
+    q: string;
+    year_from?: number;
+    year_to?: number;
+    limit?: number;
+    offset?: number;
+  }) => ['paper-search', args] as const,
+  rankedSearch: (args: {
+    q: string;
+    rank: 'trust' | 'global';
+    year_from?: number;
+    year_to?: number;
+    limit?: number;
+    offset?: number;
+  }) => ['paper-search-ranked', args] as const,
   trust: (p: string) => ['trust', p] as const,
   rankings: (p: string, q: RankingsQuery) => ['rankings', p, q] as const,
   recommendations: (p: string, d: number, limit: number) =>
@@ -71,20 +87,31 @@ export function useHealth(): UseQueryResult<HealthResponse> {
 }
 
 export function usePaperSearch(
-  q: string,
-  opts: { yearFrom?: number; yearTo?: number; enabled?: boolean } = {},
+  args: { q: string; year_from?: number; year_to?: number; limit?: number; offset?: number },
+  enabled: boolean,
 ): UseQueryResult<SearchResponse> {
-  const trimmed = q.trim();
   return useQuery({
-    queryKey: keys.search(trimmed, opts.yearFrom, opts.yearTo),
-    queryFn: ({ signal }) =>
-      api.searchPapers(
-        { q: trimmed, year_from: opts.yearFrom, year_to: opts.yearTo, limit: 25 },
-        signal,
-      ),
-    enabled: (opts.enabled ?? true) && trimmed.length >= 2,
-    staleTime: 60_000,
-    placeholderData: (prev) => prev,
+    queryKey: keys.paperSearch(args),
+    queryFn: ({ signal }) => api.searchPapers(args, signal),
+    enabled: enabled && args.q.trim().length >= 2,
+  });
+}
+
+export function useRankedSearch(
+  args: {
+    q: string;
+    rank: 'trust' | 'global';
+    year_from?: number;
+    year_to?: number;
+    limit?: number;
+    offset?: number;
+  },
+  enabled: boolean,
+): UseQueryResult<RankedSearchResponse> {
+  return useQuery({
+    queryKey: keys.rankedSearch(args),
+    queryFn: ({ signal }) => api.searchPapersRanked(args, signal),
+    enabled: enabled && args.q.trim().length >= 2,
   });
 }
 

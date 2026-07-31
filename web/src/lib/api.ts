@@ -11,6 +11,7 @@ import type {
   ProfileMe,
   RankingsQuery,
   RankingsResponse,
+  RankedSearchResponse,
   RecommendationsResponse,
   SearchResponse,
   SimulateBody,
@@ -206,6 +207,29 @@ export const api = {
         year_from: args.year_from,
         year_to: args.year_to,
         limit: args.limit ?? 20,
+        offset: args.offset,
+      })}`,
+      { signal },
+    ),
+
+  searchPapersRanked: (
+    args: {
+      q: string;
+      rank: 'trust' | 'global';
+      year_from?: number;
+      year_to?: number;
+      limit?: number;
+      offset?: number;
+    },
+    signal?: AbortSignal,
+  ) =>
+    request<RankedSearchResponse>(
+      `/papers/search${buildQuery({
+        q: args.q,
+        rank: args.rank,
+        year_from: args.year_from,
+        year_to: args.year_to,
+        limit: args.limit ?? 25,
         offset: args.offset,
       })}`,
       { signal },
