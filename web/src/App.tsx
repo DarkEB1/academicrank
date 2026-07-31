@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
 import { RankingsScreen } from './routes/Rankings';
+import { SearchScreen } from './routes/Search';
 import { TrustSetScreen } from './routes/TrustSet';
 import { RecommendationsScreen } from './routes/Recommendations';
 import { UploadsScreen } from './routes/Uploads';
@@ -34,6 +35,14 @@ export function App(): JSX.Element {
           element={
             <SessionGate>
               <RankingsScreen />
+            </SessionGate>
+          }
+        />
+        <Route
+          path="search"
+          element={
+            <SessionGate>
+              <SearchScreen />
             </SessionGate>
           }
         />

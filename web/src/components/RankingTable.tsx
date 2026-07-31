@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowDown, ArrowUp, ChevronsUpDown, Sparkles } from 'lucide-react';
 import type { ScoredPaper } from '@/lib/types';
@@ -17,6 +18,13 @@ import { Button } from './ui/Button';
 import { cn } from '@/lib/cn';
 
 export type SortKey = 'rank' | 'year' | 'citations' | 'trust' | 'lift' | 'disagreement';
+
+/** Extra attributes a caller can pin onto a row's <tr>, e.g. e2e test hooks. */
+export type RowAttributes = {
+  className?: string;
+  'data-testid'?: string;
+  'data-work-id'?: string;
+};
 
 const SORTABLE: { key: SortKey; label: string; numeric: boolean }[] = [
   { key: 'rank', label: 'Rank', numeric: true },
@@ -48,10 +56,16 @@ export function RankingTable({
   items,
   onExplain,
   emptyLabel = 'No papers matched these filters.',
+  renderActions,
+  rowProps,
 }: {
   items: ScoredPaper[];
   onExplain: (paper: ScoredPaper) => void;
   emptyLabel?: string;
+  /** Extra per-row action (e.g. a quick-trust button) rendered in its own column. */
+  renderActions?: (paper: ScoredPaper) => ReactNode;
+  /** Extra attributes spread onto each row's <tr>, e.g. test hooks. */
+  rowProps?: (paper: ScoredPaper) => RowAttributes;
 }): JSX.Element {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'rank',
@@ -145,6 +159,11 @@ export function RankingTable({
               <th scope="col" className="w-[5.5rem] px-3 py-2">
                 <span className="sr-only">Explanation</span>
               </th>
+              {renderActions ? (
+                <th scope="col" className="w-[6rem] px-3 py-2">
+                  <span className="sr-only">Actions</span>
+                </th>
+              ) : null}
             </tr>
           </thead>
 
@@ -160,7 +179,7 @@ export function RankingTable({
               >
                 {tied ? (
                   <tr>
-                    <td colSpan={8} className="px-3 pb-0 pt-3">
+                    <td colSpan={renderActions ? 9 : 8} className="px-3 pb-0 pt-3">
                       <p className="text-2xs uppercase tracking-[0.08em] text-accent">
                         {run.items.length} statistically tied — order below is arbitrary
                       </p>
@@ -179,6 +198,8 @@ export function RankingTable({
                     showRank={!tied || indexInRun === 0}
                     lastInRun={indexInRun === run.items.length - 1}
                     onExplain={onExplain}
+                    renderActions={renderActions}
+                    rowProps={rowProps}
                   />
                 ))}
               </tbody>
@@ -238,6 +259,8 @@ function RankingRow({
   showRank,
   lastInRun,
   onExplain,
+  renderActions,
+  rowProps,
 }: {
   paper: ScoredPaper;
   domain: { min: number; max: number };
@@ -246,15 +269,20 @@ function RankingRow({
   showRank: boolean;
   lastInRun: boolean;
   onExplain: (paper: ScoredPaper) => void;
+  renderActions?: (paper: ScoredPaper) => ReactNode;
+  rowProps?: (paper: ScoredPaper) => RowAttributes;
 }): JSX.Element {
   const band = disagreementBand(paper.disagreement);
+  const extraRowProps = rowProps?.(paper);
 
   return (
     <tr
+      {...extraRowProps}
       className={cn(
         'group',
         lastInRun ? 'border-b border-rule' : 'border-b border-rule/40',
         'hover:bg-raised/50',
+        extraRowProps?.className,
       )}
     >
       <td className="px-3 py-3.5 pl-3">
@@ -346,6 +374,8 @@ function RankingRow({
           Explain
         </Button>
       </td>
+
+      {renderActions ? <td className="px-3 py-3">{renderActions(paper)}</td> : null}
     </tr>
   );
 }
