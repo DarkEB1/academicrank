@@ -92,8 +92,9 @@ export function usePaperSearch(
 ): UseQueryResult<SearchResponse> {
   return useQuery({
     queryKey: keys.paperSearch(args),
-    queryFn: ({ signal }) => api.searchPapers(args, signal),
+    queryFn: ({ signal }) => api.searchPapers({ ...args, limit: args.limit ?? 25 }, signal),
     enabled: enabled && args.q.trim().length >= 2,
+    placeholderData: (prev) => prev,
   });
 }
 
@@ -110,8 +111,9 @@ export function useRankedSearch(
 ): UseQueryResult<RankedSearchResponse> {
   return useQuery({
     queryKey: keys.rankedSearch(args),
-    queryFn: ({ signal }) => api.searchPapersRanked(args, signal),
+    queryFn: ({ signal }) => api.searchPapersRanked({ ...args, limit: args.limit ?? 25 }, signal),
     enabled: enabled && args.q.trim().length >= 2,
+    placeholderData: (prev) => prev,
   });
 }
 
