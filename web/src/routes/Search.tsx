@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Search as SearchIcon, X } from 'lucide-react';
-import type { PaperBrief, RankedSearchPaper, RankMode, ScoredPaper } from '@/lib/types';
+import type { ColdStart, PaperBrief, RankedSearchPaper, RankMode, ScoredPaper } from '@/lib/types';
 import { usePaperSearch, useRankedSearch, useSeedCount, useSetTrust } from '@/lib/queries';
 import { useSession } from '@/lib/session';
 import { useDebounced } from '@/lib/hooks';
@@ -44,6 +44,35 @@ export function describePosition(p: RankedSearchPaper): string {
   return `${ord(p.relevance_rank)} by text relevance, ${ord(p.merit_rank)} by merit`;
 }
 
+export type ColdStartBanner = { tone: 'caution' | 'neutral'; title: string };
+
+/**
+ * How to present `cold_start` above a ranked-search table, if at all.
+ *
+ * The server's `reliable` flag is the only thing allowed to trigger the
+ * caution/"not reliable" framing — a `global` response is `reliable: true`
+ * with an informational message ("this ordering is unpersonalised") even
+ * though `message` is non-null, and that must never be dressed up as a
+ * warning the server did not send.
+ */
+export function coldStartBanner(
+  mode: RankMode,
+  rank: 'trust' | 'global',
+  coldStart: ColdStart,
+): ColdStartBanner | null {
+  if (!coldStart.message) return null;
+  if (!coldStart.reliable) {
+    return {
+      tone: 'caution',
+      title:
+        mode === 'trust' && rank === 'global'
+          ? 'Showing global merit — your trust set is not ready yet'
+          : `${coldStart.seeds} seed${coldStart.seeds === 1 ? '' : 's'}: this ranking is not reliable`,
+    };
+  }
+  return { tone: 'neutral', title: 'How this ordering works' };
+}
+
 function NoMatches({ hint }: { hint?: string }): JSX.Element {
   return (
     <p className="px-1 py-10 text-center text-sm text-ink-muted">
@@ -71,6 +100,10 @@ export function SearchScreen(): JSX.Element {
 
   const [inputValue, setInputValue] = useState(q);
   const debouncedQ = useDebounced(inputValue, 250);
+  // Tracks the last `q` this component itself pushed to the URL, so an
+  // external change to the URL (back/forward, a pasted link) can be told
+  // apart from our own debounced write and reconciled back into the input.
+  const lastWrittenQ = useRef(q);
 
   const update = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params);
@@ -82,12 +115,24 @@ export function SearchScreen(): JSX.Element {
     setParams(next, { replace: true });
   };
 
-  // The input is local so every keystroke does not rewrite the URL; the
-  // debounced value is what actually lands there (and drives the queries).
+  // Local input -> URL: the input is local so every keystroke does not
+  // rewrite the URL; only the debounced value lands there (and drives the
+  // queries).
   useEffect(() => {
+    if (debouncedQ === lastWrittenQ.current) return;
+    lastWrittenQ.current = debouncedQ;
     if (debouncedQ !== q) update({ q: debouncedQ || null });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedQ]);
+
+  // URL -> local input: browser back/forward (or a deep link) changes `q`
+  // without ever touching the input, so reconcile the other direction too —
+  // otherwise the box (and the results it drives) go stale after navigation.
+  useEffect(() => {
+    if (q === lastWrittenQ.current) return;
+    lastWrittenQ.current = q;
+    setInputValue(q);
+  }, [q]);
 
   const searchArgs = useMemo(
     () => ({
@@ -111,6 +156,9 @@ export function SearchScreen(): JSX.Element {
   const tooShort = trimmed.length > 0 && trimmed.length < 2;
   const rankedData = ranked.data;
   const relevanceData = relevance.data;
+  const banner = rankedData
+    ? coldStartBanner(mode, rankedData.rank, rankedData.cold_start)
+    : null;
   const total = mode === 'relevance' ? relevanceData?.total ?? 0 : rankedData?.total ?? 0;
   const itemsLength =
     mode === 'relevance' ? relevanceData?.items.length ?? 0 : rankedData?.items.length ?? 0;
@@ -259,14 +307,8 @@ export function SearchScreen(): JSX.Element {
         <NoMatches />
       ) : (
         <>
-          {rankedData.cold_start.message ? (
-            <Notice
-              title={
-                mode === 'trust' && rankedData.rank === 'global'
-                  ? 'Showing global merit — your trust set is not ready yet'
-                  : `${rankedData.cold_start.seeds} seed${rankedData.cold_start.seeds === 1 ? '' : 's'}: this ranking is not reliable`
-              }
-            >
+          {banner ? (
+            <Notice tone={banner.tone} title={banner.title}>
               <p>{rankedData.cold_start.message}</p>
             </Notice>
           ) : null}
