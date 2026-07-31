@@ -62,4 +62,24 @@ describe('ranked search presentation', () => {
     expect(row.tagName).toBe('TR');
     expect(row).toHaveAttribute('data-work-id', 'W1');
   });
+
+  it('shows the Lift column by default (existing Rankings/Recommendations behaviour)', () => {
+    render(
+      <MemoryRouter>
+        <RankingTable items={[base]} onExplain={() => undefined} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('button', { name: /lift/i })).toBeInTheDocument();
+    expect(screen.getByText('+0.00')).toBeInTheDocument();
+  });
+
+  it('omits the Lift column with hideLift, so ranked search never fabricates a score', () => {
+    render(
+      <MemoryRouter>
+        <RankingTable items={[base]} onExplain={() => undefined} hideLift />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /lift/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('+0.00')).not.toBeInTheDocument();
+  });
 });

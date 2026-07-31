@@ -278,6 +278,7 @@ export function SearchScreen(): JSX.Element {
               renderActions={quickTrust}
               rowProps={(paper) => ({ 'data-testid': 'search-result', 'data-work-id': paper.id })}
               emptyLabel="No matches."
+              hideLift
             />
           </div>
 

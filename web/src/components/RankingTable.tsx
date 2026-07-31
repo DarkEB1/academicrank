@@ -58,6 +58,7 @@ export function RankingTable({
   emptyLabel = 'No papers matched these filters.',
   renderActions,
   rowProps,
+  hideLift = false,
 }: {
   items: ScoredPaper[];
   onExplain: (paper: ScoredPaper) => void;
@@ -66,6 +67,13 @@ export function RankingTable({
   renderActions?: (paper: ScoredPaper) => ReactNode;
   /** Extra attributes spread onto each row's <tr>, e.g. test hooks. */
   rowProps?: (paper: ScoredPaper) => RowAttributes;
+  /**
+   * Omit the Lift column entirely. Lift is fame-normalised proximity computed
+   * only on the rankings/recommendations paths; callers whose `items` never
+   * had it computed (e.g. ranked search, where `lift` is hard-zeroed) must not
+   * let this table render a `+0.00` that looks like a real score.
+   */
+  hideLift?: boolean;
 }): JSX.Element {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'rank',
@@ -142,13 +150,15 @@ export function RankingTable({
                 onToggle={toggle}
                 className="w-[13rem]"
               />
-              <SortHeader
-                label="Lift"
-                sortKey="lift"
-                sort={sort}
-                onToggle={toggle}
-                className="w-[6.5rem]"
-              />
+              {!hideLift ? (
+                <SortHeader
+                  label="Lift"
+                  sortKey="lift"
+                  sort={sort}
+                  onToggle={toggle}
+                  className="w-[6.5rem]"
+                />
+              ) : null}
               <SortHeader
                 label="Disagree"
                 sortKey="disagreement"
@@ -169,6 +179,7 @@ export function RankingTable({
 
           {runs.map((run) => {
             const tied = inRankOrder && run.tied;
+            const columnCount = 8 - (hideLift ? 1 : 0) + (renderActions ? 1 : 0);
             return (
               <tbody
                 key={`${run.tieGroup}-${run.startIndex}`}
@@ -179,7 +190,7 @@ export function RankingTable({
               >
                 {tied ? (
                   <tr>
-                    <td colSpan={renderActions ? 9 : 8} className="px-3 pb-0 pt-3">
+                    <td colSpan={columnCount} className="px-3 pb-0 pt-3">
                       <p className="text-2xs uppercase tracking-[0.08em] text-accent">
                         {run.items.length} statistically tied — order below is arbitrary
                       </p>
@@ -200,6 +211,7 @@ export function RankingTable({
                     onExplain={onExplain}
                     renderActions={renderActions}
                     rowProps={rowProps}
+                    hideLift={hideLift}
                   />
                 ))}
               </tbody>
@@ -261,6 +273,7 @@ function RankingRow({
   onExplain,
   renderActions,
   rowProps,
+  hideLift,
 }: {
   paper: ScoredPaper;
   domain: { min: number; max: number };
@@ -271,6 +284,7 @@ function RankingRow({
   onExplain: (paper: ScoredPaper) => void;
   renderActions?: (paper: ScoredPaper) => ReactNode;
   rowProps?: (paper: ScoredPaper) => RowAttributes;
+  hideLift?: boolean;
 }): JSX.Element {
   const band = disagreementBand(paper.disagreement);
   const extraRowProps = rowProps?.(paper);
@@ -334,20 +348,22 @@ function RankingRow({
         {tied ? <span className="sr-only">Tied with adjacent rows.</span> : null}
       </td>
 
-      <td
-        className="px-3 py-3.5 font-mono text-xs tnum"
-        title="Proximity relative to how reachable this paper is for everyone. Positive: closer to you than to a generic reader. The denominator is a fixed background and carries no error bar of its own."
-      >
-        <span className={paper.lift < 0 ? 'text-ink-faint' : 'text-ink'}>
-          {paper.lift >= 0 ? '+' : ''}
-          {paper.lift.toFixed(2)}
-        </span>
-        {paper.lift_uncertainty ? (
-          <span className="block text-2xs text-ink-faint">
-            ± {paper.lift_uncertainty.stderr.toFixed(2)}
+      {!hideLift ? (
+        <td
+          className="px-3 py-3.5 font-mono text-xs tnum"
+          title="Proximity relative to how reachable this paper is for everyone. Positive: closer to you than to a generic reader. The denominator is a fixed background and carries no error bar of its own."
+        >
+          <span className={paper.lift < 0 ? 'text-ink-faint' : 'text-ink'}>
+            {paper.lift >= 0 ? '+' : ''}
+            {paper.lift.toFixed(2)}
           </span>
-        ) : null}
-      </td>
+          {paper.lift_uncertainty ? (
+            <span className="block text-2xs text-ink-faint">
+              ± {paper.lift_uncertainty.stderr.toFixed(2)}
+            </span>
+          ) : null}
+        </td>
+      ) : null}
 
       <td className="px-3 py-3.5">
         {band === 'concordant' ? (
