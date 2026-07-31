@@ -31,6 +31,10 @@ punches.
 - **Trust set builder** — search the corpus, add papers at strength 1–5, mark distrust,
   import a `.bib` file. Below five seeds it tells you the rankings are unreliable
   instead of pretending otherwise.
+- **Merit-ranked search** — search the corpus like Google used PageRank: text
+  match picks the candidates, MeritRank (yours or global) re-orders them via
+  reciprocal rank fusion, with the same error bars, tie brackets and
+  explanations as every other ranking.
 - **Upload your own paper** — drop a PDF, review its parsed bibliography (DOI/arXiv
   matches arrive pre-ticked; fuzzier matches need an explicit tick), and seed your
   trust set at 3/5 per reference in one action. The paper and any references OpenAlex

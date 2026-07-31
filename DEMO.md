@@ -68,7 +68,25 @@ Two things to point at:
 
 ---
 
-## 2:45 — Explain: where the trust actually came from (75 seconds)
+## 2:45 — Search: the same trust travels into search results (45 seconds)
+
+Go to **Search** (`/#/search`). Type a query from the seed cluster — e.g.
+`causal inference` — and toggle between the three modes above the results:
+
+- **Relevance** — the classic text-match order.
+- **Your trust** — the same text candidates, re-ordered by blending relevance with
+  proximity to your five-seed trust set via Reciprocal Rank Fusion. It never invents a
+  score for a paper the text search itself did not surface.
+- **Global merit** — the same idea, blended with unpersonalised merit instead of your
+  trust set, for when you have no seeds yet or want the unpersonalised view.
+
+Every row keeps its **Explain** action, so re-ranking search results never trades away
+the honesty the rest of the app insists on — you can still ask *why* a paper landed
+where it did.
+
+---
+
+## 3:30 — Explain: where the trust actually came from (75 seconds)
 
 Click **Explain** on the top-ranked paper.
 
@@ -88,7 +106,7 @@ author ~0.06, venue and institution near zero.
 
 ---
 
-## 4:00 — The parameter playground (60 seconds)
+## 4:45 — The parameter playground (60 seconds)
 
 Go to **Parameters** (`/#/params`). This is the screen that decides whether a sceptic
 believes you.
@@ -108,7 +126,7 @@ returns **422** rather than accepting a value it would silently ignore.
 
 ---
 
-## 5:00 — The most interesting object in the system
+## 5:45 — The most interesting object in the system
 
 Open any paper view (`/#/paper/:id`) and look at the **comparison strip**: your trust
 score vs. unpersonalised merit vs. raw citation count, as three percentile bars.
