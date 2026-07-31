@@ -61,8 +61,40 @@ Sets the `pv_token` cookie. No password, no email.
 ### `GET /api/profiles/me` → `{ id, label, params, trust_count, warmed_at }`
 
 ### `GET /api/papers/search`
-Query: `q` (required, min 2 chars), `year_from`, `year_to`, `limit` (≤50), `offset`.
-→ `{ total, items: PaperBrief[] }`. Postgres `tsvector` full-text with trigram fallback.
+Query: `q` (required, min 2 chars), `year_from`, `year_to`, `limit` (≤50), `offset`,
+`rank` (`relevance` default | `trust` | `global`).
+Postgres `tsvector` full-text with trigram fallback selects the candidate set;
+`rank` only changes how that set is *ordered*.
+
+`rank=relevance` (default, unchanged) → `{ total, items: PaperBrief[] }`.
+
+`rank=trust` or `rank=global` re-order the top `FETCH_K` (500) text matches by
+reciprocal rank fusion (RRF) of text-relevance order and MeritRank order, and
+return:
+```ts
+type RankedSearchPaper = ScoredPaper & {
+  relevance_rank: number;  // 1-based position in the text-relevance order
+  merit_rank: number;      // 1-based position in the merit order
+};
+
+type RankedSearchResponse = {
+  total: number;           // min(match count, 500)
+  items: RankedSearchPaper[];
+  cold_start: ColdStart;
+  disclaimer: string;
+  rank: "trust" | "global"; // the EFFECTIVE mode after any fallback
+};
+```
+`rank=global` orders by unpersonalised global merit and is available with no
+profile. `rank=trust` orders by proximity to the caller's trust set and requires
+a profile with a non-empty trust set; if the request is anonymous or the trust
+set is empty, the response silently falls back to `rank: "global"` and
+`cold_start` explains why (`reliable: false`, a message). `trust` (and
+`global_merit`) on each item are always the profile's real MeritRank/global
+values -- in fallback, `trust` *is* the global value, and the disclaimer plus
+`rank: "global"` carry the honesty. Only the top 500 text matches are ever
+ranked or paginated; matches beyond that window are invisible to ranked search
+(the disclaimer says so).
 
 ### `POST /api/profiles/{id}/trust`
 Body `{ work_id: string, strength: 1|2|3|4|5, is_distrust?: boolean }`.

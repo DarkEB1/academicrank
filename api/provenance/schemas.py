@@ -148,6 +148,22 @@ class SearchResponse(BaseModel):
     items: list[PaperBrief]
 
 
+class RankedSearchPaper(ScoredPaper):
+    """A search result whose *order* came from RRF; the scores are MeritRank."""
+    relevance_rank: int
+    merit_rank: int
+
+
+class RankedSearchResponse(BaseModel):
+    total: int
+    items: list[RankedSearchPaper]
+    cold_start: "ColdStart"
+    disclaimer: str
+    # The effective mode after fallback: a trust request with no usable profile
+    # comes back as "global", and cold_start.message says why.
+    rank: Literal["trust", "global"]
+
+
 class TrustEntry(BaseModel):
     work: PaperBrief
     strength: int

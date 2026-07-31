@@ -1,13 +1,14 @@
 """Search, paper detail, and the explanation endpoint."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import text
 
-from .. import config, ranking, schemas, services
+from .. import config, ranking, schemas, searchrank, services
 from ..deps import DbSession, OptionalProfile, OwnedProfile
+from ..meritrank import Uncertainty as MrUncertainty, assign_tie_groups
 from ..models import Trust, Work, node_to_work_id, profile_node, work_node
 
 router = APIRouter(prefix="/api", tags=["papers"])
@@ -21,7 +22,42 @@ TRGM_THRESHOLD = 0.2
 # ---------------------------------------------------------------------------
 
 
-@router.get("/papers/search", response_model=schemas.SearchResponse)
+def _text_candidates(
+    db, params: dict[str, object], year_sql: str, limit: int, offset: int,
+) -> tuple[int, list[str]]:
+    """Total match count and one page of ids in text-relevance order.
+
+    Exactly the retrieval the relevance mode has always used -- tsvector first,
+    trigram fallback -- so ranked modes inherit its behaviour (weighted tsv,
+    typo tolerance, visibility filters baked into year_sql/params).
+    """
+    p = {**params, "lim": limit, "off": offset}
+    total = int(db.execute(text(
+        "SELECT count(*) FROM works w "
+        "WHERE w.tsv @@ plainto_tsquery('english', :q)" + year_sql
+    ), p).scalar_one())
+    if total:
+        rows = db.execute(text(
+            "SELECT w.id FROM works w "
+            "WHERE w.tsv @@ plainto_tsquery('english', :q)" + year_sql +
+            " ORDER BY ts_rank(w.tsv, plainto_tsquery('english', :q)) DESC,"
+            " w.cited_by_count DESC LIMIT :lim OFFSET :off"
+        ), p).all()
+    else:
+        db.execute(text("SELECT set_config('pg_trgm.similarity_threshold', :t, true)"),
+                   {"t": str(TRGM_THRESHOLD)})
+        total = int(db.execute(text(
+            "SELECT count(*) FROM works w WHERE w.title % :q" + year_sql
+        ), p).scalar_one())
+        rows = db.execute(text(
+            "SELECT w.id FROM works w WHERE w.title % :q" + year_sql +
+            " ORDER BY similarity(w.title, :q) DESC, w.cited_by_count DESC"
+            " LIMIT :lim OFFSET :off"
+        ), p).all()
+    return total, [r[0] for r in rows]
+
+
+@router.get("/papers/search", response_model=None)
 def search(
     db: DbSession,
     maybe_profile: OptionalProfile,
@@ -30,12 +66,17 @@ def search(
     year_to: Optional[int] = None,
     limit: int = Query(default=25, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
-) -> schemas.SearchResponse:
+    rank: str = Query(default="relevance", pattern="^(relevance|trust|global)$"),
+) -> Union[schemas.RankedSearchResponse, schemas.SearchResponse]:
     """Postgres `tsvector` full text, falling back to trigram similarity.
 
     The fallback is not decoration: OpenAlex titles are full of LaTeX fragments and
     transliterated names, and a user who types "Perelman entropy funcitonal" gets
     nothing at all from `plainto_tsquery`.
+
+    `rank=trust|global` re-orders the same candidate set by reciprocal rank fusion
+    of text relevance and MeritRank (see `searchrank.py`); `rank=relevance` (the
+    default) is the untouched original behaviour.
     """
     year_sql = ""
     params: dict[str, object] = {"q": q, "lim": limit, "off": offset}
@@ -57,38 +98,94 @@ def search(
                      "AND u.profile_id = :vis_me))")
         params["vis_me"] = maybe_profile.id
 
-    total = int(db.execute(text(
-        "SELECT count(*) FROM works w "
-        "WHERE w.tsv @@ plainto_tsquery('english', :q)" + year_sql
-    ), params).scalar_one())
+    if rank == "relevance":
+        total, ids = _text_candidates(db, params, year_sql, limit, offset)
+        briefs = services.paper_briefs(db, ids)
+        return schemas.SearchResponse(
+            total=total,
+            items=[services.brief_or_placeholder(briefs, i) for i in ids],
+        )
 
-    if total:
-        rows = db.execute(text(
-            "SELECT w.id FROM works w "
-            "WHERE w.tsv @@ plainto_tsquery('english', :q)" + year_sql +
-            " ORDER BY ts_rank(w.tsv, plainto_tsquery('english', :q)) DESC,"
-            " w.cited_by_count DESC LIMIT :lim OFFSET :off"
-        ), params).all()
+    total, cand = _text_candidates(db, params, year_sql, searchrank.FETCH_K, 0)
+    effective, pool = rank, None
+    if rank == "trust":
+        if maybe_profile is None:
+            effective = "global"
+            cold = schemas.ColdStart(seeds=0, reliable=False, message=(
+                "You asked for trust-ranked search without a profile, so this "
+                "ordering is unpersonalised global merit. Create a profile and "
+                "trust a few papers to personalise it."))
+        else:
+            pool = services.build_pool(db, maybe_profile, context="aggregate",
+                                       exclude_trusted=False)
+            if pool.seeds == 0:
+                effective, pool = "global", None
+                cold = schemas.ColdStart(seeds=0, reliable=False, message=(
+                    "You asked for trust-ranked search but your trust set is "
+                    "empty, so this ordering is unpersonalised global merit. "
+                    "Trust a few papers to personalise it."))
+            else:
+                cold = services.cold_start(pool.seeds)
     else:
-        # SET does not accept bind parameters; set_config(..., is_local => true) is
-        # the parameterisable, transaction-scoped equivalent.
-        db.execute(text("SELECT set_config('pg_trgm.similarity_threshold', :t, true)"),
-                   {"t": str(TRGM_THRESHOLD)})
-        total = int(db.execute(text(
-            "SELECT count(*) FROM works w WHERE w.title % :q" + year_sql
-        ), params).scalar_one())
-        rows = db.execute(text(
-            "SELECT w.id FROM works w WHERE w.title % :q" + year_sql +
-            " ORDER BY similarity(w.title, :q) DESC, w.cited_by_count DESC"
-            " LIMIT :lim OFFSET :off"
-        ), params).all()
+        cold = schemas.ColdStart(seeds=0, reliable=True, message=(
+            "This ordering is unpersonalised: global merit, the same for "
+            "everyone, not proximity to your trust set."))
 
-    ids = [r[0] for r in rows]
-    briefs = services.paper_briefs(db, ids)
-    return schemas.SearchResponse(
-        total=total,
-        items=[services.brief_or_placeholder(briefs, i) for i in ids],
-    )
+    gvals = services.global_scores(db)
+    merit_values = pool.trust_values if pool is not None else gvals
+    fused = searchrank.fuse(cand, searchrank.merit_ranks(merit_values))
+
+    # Scores for the whole candidate set, tie groups assigned over the
+    # *displayed* (fused) order so brackets are stable across pages.
+    by_id = pool.by_id() if pool is not None else {}
+    n_samples = max(pool.seeds if pool is not None else 0, 1)
+    triples: list[tuple[str, float, MrUncertainty]] = []
+    for f in fused:
+        item = by_id.get(f.work_id)
+        if pool is not None and item is not None:
+            triples.append((f.work_id, item.trust, item.uncertainty))
+        else:
+            v = 0.0 if pool is not None else merit_values.get(f.work_id, 0.0)
+            triples.append((f.work_id, v, MrUncertainty(
+                abs(v) * 0.5, max(0.0, v * 0.5), v * 1.5, 0,
+                "proportional_fallback", n_samples)))
+    assign_tie_groups(triples)
+    trust_of = {wid: (v, u) for wid, v, u in triples}
+
+    if pool is not None:
+        trust_pct, global_pct = pool.trust_pct, pool.global_pct
+    else:
+        global_pct = services.rank_percentiles(gvals)
+        trust_pct = global_pct  # global mode: personal == global by construction
+
+    page = fused[offset:offset + limit]
+    briefs = services.paper_briefs(db, [f.work_id for f in page])
+    items: list[schemas.RankedSearchPaper] = []
+    for n, f in enumerate(page, start=offset + 1):
+        brief = services.brief_or_placeholder(briefs, f.work_id)
+        v, unc = trust_of[f.work_id]
+        p_cit = services.CITATION_PCT.percentile(db, brief.cited_by_count)
+        items.append(schemas.RankedSearchPaper(
+            **brief.model_dump(),
+            trust=v,
+            uncertainty=services.to_uncertainty(unc),
+            global_merit=gvals.get(f.work_id, 0.0),
+            rank=n,
+            disagreement=services.disagreement(
+                trust_pct.get(f.work_id, 0.0), global_pct.get(f.work_id, 0.0), p_cit),
+            relevance_rank=f.relevance_rank,
+            merit_rank=f.merit_rank,
+        ))
+
+    blend = (" Ordering fuses text relevance with "
+             + ("proximity to your trust set"
+                if effective == "trust" else "unpersonalised global merit")
+             + f" (reciprocal rank fusion); the trust column is the MeritRank "
+               f"value, and only the top {searchrank.FETCH_K} text matches "
+               f"are ranked.")
+    return schemas.RankedSearchResponse(
+        total=min(total, searchrank.FETCH_K), items=items, cold_start=cold,
+        disclaimer=config.DISCLAIMER + blend, rank=effective)
 
 
 # ---------------------------------------------------------------------------
