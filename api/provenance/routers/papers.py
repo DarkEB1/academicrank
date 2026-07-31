@@ -1,6 +1,7 @@
 """Search, paper detail, and the explanation endpoint."""
 from __future__ import annotations
 
+import dataclasses
 from typing import Optional, Union
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -143,7 +144,14 @@ def search(
     for f in fused:
         item = by_id.get(f.work_id)
         if pool is not None and item is not None:
-            triples.append((f.work_id, item.trust, item.uncertainty))
+            # item.uncertainty is the SAME mutable instance held in the pool
+            # cache (services._pool_cache, TTL 600s, keyed without the search
+            # query). assign_tie_groups() below mutates .tie_group in place,
+            # so handing it the cached instance would let this query's RRF
+            # order overwrite the cached pool's tie brackets -- corrupting
+            # /rankings and any other search that shares this pool's cache
+            # key. Copy it; only the copy gets mutated.
+            triples.append((f.work_id, item.trust, dataclasses.replace(item.uncertainty)))
         else:
             v = 0.0 if pool is not None else merit_values.get(f.work_id, 0.0)
             triples.append((f.work_id, v, MrUncertainty(

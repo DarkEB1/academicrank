@@ -139,3 +139,82 @@ def test_trust_mode_with_seeds(client, db, warm_profile):
     # trust values are the profile's MeritRank scores: at least one non-zero,
     # and uncertainty is real (not all zeros) for pooled items.
     assert any(it["trust"] > 0 for it in body["items"])
+
+
+def test_trust_mode_does_not_corrupt_the_shared_pool_cache(client, warm_profile):
+    """Regression: the ranked branch used to hand assign_tie_groups() the SAME
+    Uncertainty instances held in services._pool_cache (cache key: profile,
+    trust signature, exclude_trusted, graph generation, weights, upload
+    visibility, lift gamma -- NOT the search query). assign_tie_groups()
+    mutates .tie_group on those shared instances in place, iterating the
+    search's RRF order rather than the pool's real trust order -- so a
+    rank=trust search silently rewrote the cached pool's tie brackets to
+    reflect that search's ordering.
+
+    GET /profiles/{id}/rankings?exclude_trusted=false with context=aggregate
+    (the default) builds its pool with the exact same cache key rank=trust
+    search uses (see papers.py: `build_pool(db, profile, context="aggregate",
+    exclude_trusted=False)`), and its default sort ("trust") reads
+    `item.uncertainty.tie_group` directly off the cached pool items rather
+    than recomputing it (rankings.py only recomputes tie groups for
+    `sort=lift`) -- so it is the exact reader the finding says gets corrupted.
+
+    A generic broad token does not reliably reproduce this: the fix must be
+    proven on pool items that the search's candidate set actually reaches, and
+    an arbitrary word may share no vocabulary with this profile's trust
+    neighbourhood at all. So the two search queries are built FROM two of the
+    pool's own titles (guaranteeing each query's candidate set contains at
+    least that item), which is what actually exercises the shared,
+    order-dependent mutation.
+    """
+    pid, token = warm_profile
+    auth = {"Authorization": f"Bearer {token}"}
+
+    def _rankings_on_shared_pool(limit: int = 50):
+        r = client.get(f"/api/profiles/{pid}/rankings",
+                       params={"limit": limit, "exclude_trusted": "false"},
+                       headers=auth)
+        assert r.status_code == 200, r.text
+        return r.json()["items"]
+
+    def _trust_search(q: str):
+        r = client.get("/api/papers/search",
+                       params={"q": q, "rank": "trust", "limit": 25},
+                       headers=auth)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    baseline_items = _rankings_on_shared_pool()
+    titled = [it for it in baseline_items
+              if it.get("title") and len(it["title"]) > 15]
+    if len(titled) < 2:
+        pytest.skip("warm_profile's pool has too few titled items to build "
+                     "two distinct title-derived queries")
+    query_a = " ".join(titled[0]["title"].split()[:4])
+    query_b = " ".join(titled[len(titled) // 2]["title"].split()[:4])
+    baseline_by_id = {it["id"]: it["uncertainty"]["tie_group"]
+                      for it in baseline_items}
+
+    a = _trust_search(query_a)
+    if a["total"] == 0:
+        pytest.skip(f"corpus has no match for {query_a!r}")
+    after_a_by_id = {it["id"]: it["uncertainty"]["tie_group"]
+                     for it in _rankings_on_shared_pool()}
+
+    b = _trust_search(query_b)
+    if b["total"] == 0:
+        pytest.skip(f"corpus has no match for {query_b!r}")
+    after_b_by_id = {it["id"]: it["uncertainty"]["tie_group"]
+                     for it in _rankings_on_shared_pool()}
+
+    common = set(baseline_by_id) & set(after_a_by_id) & set(after_b_by_id)
+    assert common, "no ids survived across the three /rankings snapshots"
+    mismatches = {
+        i: (baseline_by_id[i], after_a_by_id[i], after_b_by_id[i])
+        for i in common
+        if not (baseline_by_id[i] == after_a_by_id[i] == after_b_by_id[i])
+    }
+    assert not mismatches, (
+        "/rankings tie_group values changed after interleaved rank=trust "
+        "searches -- the search mutated the shared pool cache's Uncertainty "
+        f"instances instead of working on private copies: {mismatches}")
