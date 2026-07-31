@@ -59,6 +59,7 @@ export function RankingTable({
   renderActions,
   rowProps,
   hideLift = false,
+  tieBannerText,
 }: {
   items: ScoredPaper[];
   onExplain: (paper: ScoredPaper) => void;
@@ -74,6 +75,15 @@ export function RankingTable({
    * let this table render a `+0.00` that looks like a real score.
    */
   hideLift?: boolean;
+  /**
+   * Override the per-bracket tie banner copy. Default ("order below is
+   * arbitrary") is correct when the table's own sort produced the bracket
+   * (rankings, blindspots, recommendations). It is NOT correct for ranked
+   * search: there the display order is RRF-fused, so within a genuine tie
+   * bracket the order is still determined by relative text relevance, not
+   * arbitrary. Receives the bracket size.
+   */
+  tieBannerText?: (size: number) => string;
 }): JSX.Element {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({
     key: 'rank',
@@ -192,7 +202,9 @@ export function RankingTable({
                   <tr>
                     <td colSpan={columnCount} className="px-3 pb-0 pt-3">
                       <p className="text-2xs uppercase tracking-[0.08em] text-accent">
-                        {run.items.length} statistically tied — order below is arbitrary
+                        {tieBannerText
+                          ? tieBannerText(run.items.length)
+                          : `${run.items.length} statistically tied — order below is arbitrary`}
                       </p>
                       <span className="sr-only">{tieSentence(run.items.length)}</span>
                     </td>

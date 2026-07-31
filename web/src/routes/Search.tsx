@@ -321,6 +321,9 @@ export function SearchScreen(): JSX.Element {
               rowProps={(paper) => ({ 'data-testid': 'search-result', 'data-work-id': paper.id })}
               emptyLabel="No matches."
               hideLift
+              tieBannerText={(size) =>
+                `${size} statistically tied — order below reflects text relevance, not trust`
+              }
             />
           </div>
 

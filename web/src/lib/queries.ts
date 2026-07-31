@@ -95,6 +95,7 @@ export function usePaperSearch(
     queryFn: ({ signal }) => api.searchPapers({ ...args, limit: args.limit ?? 25 }, signal),
     enabled: enabled && args.q.trim().length >= 2,
     placeholderData: (prev) => prev,
+    staleTime: 60_000,
   });
 }
 
@@ -114,6 +115,7 @@ export function useRankedSearch(
     queryFn: ({ signal }) => api.searchPapersRanked({ ...args, limit: args.limit ?? 25 }, signal),
     enabled: enabled && args.q.trim().length >= 2,
     placeholderData: (prev) => prev,
+    staleTime: 60_000,
   });
 }
 
