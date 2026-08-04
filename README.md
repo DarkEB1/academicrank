@@ -1,5 +1,7 @@
 # academicrank (Provenance)
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/DarkEB1/academicrank)
+
 **Given the papers you already trust, how much should you trust this one?**
 
 Provenance answers that question *subjectively* and *per user*. There is no global
